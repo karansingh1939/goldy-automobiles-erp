@@ -2,7 +2,7 @@
 
 ## Published source
 
-Public repository: <https://github.com/karansingh-1939/goldy-automobiles-erp>.
+Public repository: <https://github.com/karansingh1939/goldy-automobiles-erp>.
 
 The published history retains the five existing source commits with their original authors, dates and messages, followed by seven commits for the stabilization, workshop features and CI work. Filtering private historical files changes commit hashes. No activity was backdated. The original Git history is retained in a private local archive outside the project; the development folder now tracks the published `main` branch.
 
@@ -11,7 +11,7 @@ The publication audit examined 707 historical blobs. It found no files or creden
 ## Verification
 
 - Local `npm run check`: formatting, lint, production renderer compilation, 202 backend tests and 35 renderer tests passed, with zero skipped tests.
-- [GitHub Windows CI run](https://github.com/karansingh-1939/goldy-automobiles-erp/actions/runs/38084972087): clean dependency installation, the complete quality check and high-severity dependency audit passed for commit `19cbaac75a3f5ab569aefd5e352fecf0bdfb5d18`.
+- GitHub Windows CI run 38084972087 (on the repository's original location, before it moved to the `karansingh1939` account): clean dependency installation, the complete quality check and high-severity dependency audit passed for commit `19cbaac75a3f5ab569aefd5e352fecf0bdfb5d18`.
 - `npm run build:win`: produced the unsigned NSIS installer `GOLDY AUTOMOBILE ERP Setup 0.2.0.exe`.
 - Installer SHA-256: `B4E9882F3B2C6724CAA782425ED5816BB58B57486EB309443ECFA073F8DDEEDB`.
 - All 5,034 packed/unpacked ASAR files matched their embedded SHA-256 integrity metadata. Selected desktop, workshop, finance and migration files also matched their source bytes; packaged version was `0.2.0`.

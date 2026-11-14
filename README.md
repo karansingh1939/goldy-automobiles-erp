@@ -1,6 +1,6 @@
 # Goldy Automobiles ERP
 
-[![Windows quality checks](https://github.com/karansingh-1939/goldy-automobiles-erp/actions/workflows/ci.yml/badge.svg)](https://github.com/karansingh-1939/goldy-automobiles-erp/actions/workflows/ci.yml)
+[![Windows quality checks](https://github.com/karansingh1939/goldy-automobiles-erp/actions/workflows/ci.yml/badge.svg)](https://github.com/karansingh1939/goldy-automobiles-erp/actions/workflows/ci.yml)
 
 An offline-first Windows desktop ERP for a single-laptop automobile repair workshop. It connects vehicle intake, job cards, spare-parts inventory, purchasing, billing and workshop accounts in one local application.
 
