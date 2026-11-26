@@ -218,6 +218,8 @@ export default function VehicleManager() {
             <button
               onClick={() => handleOpenEdit(v)}
               disabled={!canWrite}
+              title="Edit"
+              aria-label="Edit"
               className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 hover:text-brand-650 disabled:opacity-30 transition-colors"
             >
               <Edit2 className="h-4.5 w-4.5" />
@@ -225,6 +227,8 @@ export default function VehicleManager() {
             <button
               onClick={() => handleDelete(v)}
               disabled={!canWrite}
+              title="Delete"
+              aria-label="Delete"
               className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-450 hover:text-red-650 disabled:opacity-30 transition-colors"
             >
               <Trash2 className="h-4.5 w-4.5" />

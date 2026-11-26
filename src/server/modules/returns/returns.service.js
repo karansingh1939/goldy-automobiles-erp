@@ -1,13 +1,10 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { ReturnsRepository } from './returns.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { AllocationService } from '../accounting/allocation.service.js';
-
-function code(prefix) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
 
 export class ReturnsService {
   constructor(db) {
@@ -112,7 +109,7 @@ export class ReturnsService {
       }
 
       const customerReturn = this.repository.createCustomerReturn({
-        return_number: code('CR'),
+        return_number: nextDocumentNumber(this.db, DocumentSeries.CREDIT_NOTE, date),
         company_id: invoice.company_id || 1,
         customer_id: invoice.customer_id,
         invoice_id: invoiceId,
@@ -450,7 +447,7 @@ export class ReturnsService {
       }
 
       const supplierReturn = this.repository.createSupplierReturn({
-        return_number: code('SR'),
+        return_number: nextDocumentNumber(this.db, DocumentSeries.DEBIT_NOTE, date),
         company_id: companyId,
         supplier_id: supplierId,
         purchase_id: purchaseId || null,

@@ -166,7 +166,6 @@ function VerificationHistory({ canAdjust, processing, action, decide }) {
       columns={[
         ...columnsFor([
           'verification_number',
-          'audit_session_id',
           'verification_type',
           'item_name',
           'sku',
@@ -176,7 +175,6 @@ function VerificationHistory({ canAdjust, processing, action, decide }) {
           'counted_quantity',
           'difference',
           'status',
-          'adjustment_id',
           'verified_by_name',
           'verified_at',
           'notes',

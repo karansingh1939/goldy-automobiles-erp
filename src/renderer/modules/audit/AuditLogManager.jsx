@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatLocalTimestamp } from '../../shared/utils/date-time.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
@@ -24,7 +25,11 @@ export default function AuditLogManager() {
     enabled: hasPermission('audit.read'),
   });
   const columns = [
-    { accessorKey: 'createdAt', header: 'Recorded at (UTC)' },
+    {
+      accessorKey: 'createdAt',
+      header: 'When',
+      cell: (info) => formatLocalTimestamp(info.getValue()),
+    },
     { accessorKey: 'userName', header: 'Staff' },
     { accessorKey: 'action', header: 'Action' },
     { accessorKey: 'entityType', header: 'Module' },

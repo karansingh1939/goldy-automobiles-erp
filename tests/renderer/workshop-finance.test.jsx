@@ -28,9 +28,9 @@ it('shows ledger-reconciled dues and saves a counted cash variance with its expl
       <WorkshopFinance />
     </QueryClientProvider>,
   );
-  await screen.findByText('Expected closing cash');
-  fireEvent.change(screen.getByLabelText('Counted cash (₹)'), { target: { value: '85' } });
-  fireEvent.change(screen.getByLabelText('Count notes'), {
+  await screen.findByText('Should be in the drawer');
+  fireEvent.change(screen.getByLabelText('Cash you counted (₹)'), { target: { value: '85' } });
+  fireEvent.change(screen.getByLabelText('Note (needed if it does not match)'), {
     target: { value: 'Five rupees short.' },
   });
   fireEvent.click(screen.getByText('Save cash count'));

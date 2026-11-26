@@ -11,7 +11,7 @@ export default function RemoteSelect({
   onChange,
   searchLabel,
   optionLabel,
-  placeholder = 'Select a record...',
+  placeholder = 'Choose...',
   required = true,
 }) {
   const [search, setSearch] = useState('');

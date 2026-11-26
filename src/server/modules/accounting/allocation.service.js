@@ -8,6 +8,29 @@ const invoiceCredits = `(SELECT COALESCE(SUM(total_refund_amount), 0) FROM custo
   WHERE invoice_id = invoices.id AND status = 'COMPLETED')`;
 
 /**
+ * Unlinks every customer payment from one bill that is being cancelled. The
+ * money stays on each receipt as unused (an advance the customer has with us),
+ * which is what really happened: the cash was received.
+ * @returns {number} total amount released
+ */
+export function releaseDocumentAllocations(db, documentType, documentId) {
+  const rows = db
+    .prepare(
+      'SELECT id, customer_receipt_id, allocated_amount FROM receipt_allocations WHERE document_type = ? AND document_id = ?',
+    )
+    .all(documentType, documentId);
+  let released = 0;
+  for (const row of rows) {
+    db.prepare(
+      'UPDATE customer_receipts SET unallocated_amount = ROUND(unallocated_amount + ?, 2) WHERE id = ?',
+    ).run(row.allocated_amount, row.customer_receipt_id);
+    db.prepare('DELETE FROM receipt_allocations WHERE id = ?').run(row.id);
+    released += Number(row.allocated_amount);
+  }
+  return roundMoney(released);
+}
+
+/**
  * Service to manage invoice/bill matching and payment allocations polymorphically.
  * Supports both CUSTOMER and SUPPLIER modes.
  */

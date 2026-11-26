@@ -112,17 +112,18 @@ export default function SupplierLedger() {
                 enablePagination={false}
                 columns={[
                   { accessorKey: 'entry_date', header: 'Date' },
-                  { accessorKey: 'entry_type', header: 'Transaction' },
+                  { accessorKey: 'entry_type', header: 'Type' },
                   {
                     id: 'reference',
-                    header: 'Reference',
+                    header: 'Bill / payment',
                     cell: ({ row }) =>
+                      row.original.reference_label ||
                       `${row.original.reference_type || ''} #${row.original.reference_id || ''}`,
                   },
                   ...[
-                    ['debit', 'Debit (paid/returned)'],
-                    ['credit', 'Credit (purchased)'],
-                    ['balance_after', 'Running balance'],
+                    ['debit', 'Paid or returned'],
+                    ['credit', 'Bought'],
+                    ['balance_after', 'Still owed'],
                   ].map(([key, header]) => ({
                     accessorKey: key,
                     header,

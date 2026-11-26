@@ -353,12 +353,12 @@ export default function ReturnsManager() {
                     }}
                     className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
                   >
-                    <option value="">Select invoice...</option>
+                    <option value="">Choose the bill...</option>
                     {invoices.map((inv) => (
                       <option
                         key={inv.id}
                         value={inv.id}
-                      >{`${inv.job_card_number} (Owner: ${inv.customer_name})`}</option>
+                      >{`Bill ${inv.invoice_number || inv.job_card_number} · ${inv.customer_name} · ${inv.registration_number || ''}`}</option>
                     ))}
                   </select>
                 </div>

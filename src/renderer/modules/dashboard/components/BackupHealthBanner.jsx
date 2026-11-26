@@ -38,7 +38,7 @@ export function BackupHealthBanner() {
         <CheckCircle className="h-4 w-4" />
         Data is backed up
         {data.lastSuccessAt
-          ? ` (last backup ${new Date(data.lastSuccessAt).toLocaleString()})`
+          ? ` (last backup ${new Date(data.lastSuccessAt).toLocaleString('en-IN')})`
           : ''}
         .
       </div>

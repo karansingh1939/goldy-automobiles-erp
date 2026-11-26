@@ -28,7 +28,7 @@ export function RecentSalesTable({ sales, isLoading }) {
     () => [
       {
         accessorKey: 'invoiceNumber',
-        header: 'Invoice Number',
+        header: 'Bill no.',
         enableSorting: false, // Sorting not required for alphanumeric invoice IDs
         cell: (info) => (
           <span className="font-mono font-semibold text-gray-900">{info.getValue()}</span>
@@ -36,7 +36,7 @@ export function RecentSalesTable({ sales, isLoading }) {
       },
       {
         accessorKey: 'invoiceDate',
-        header: 'Invoice Date',
+        header: 'Date',
         cell: (info) => {
           const dateVal = info.getValue();
           if (!dateVal) return '-';
@@ -87,10 +87,8 @@ export function RecentSalesTable({ sales, isLoading }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col min-h-[380px]">
       <div className="mb-4">
-        <h2 className="text-lg font-bold text-gray-900 tracking-tight">Recent Sales Activity</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          Latest finalized sales invoices sorted by date. Click headers to sort.
-        </p>
+        <h2 className="text-lg font-bold text-gray-900 tracking-tight">Latest bills</h2>
+        <p className="text-xs text-gray-500 mt-0.5">The last few bills made.</p>
       </div>
 
       <div className="flex-1 overflow-x-auto">
@@ -105,7 +103,7 @@ export function RecentSalesTable({ sales, isLoading }) {
                   return (
                     <th
                       key={header.id}
-                      className="px-4 py-3 bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wider select-none border-b border-gray-200"
+                      className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-600 select-none border-b border-gray-200"
                     >
                       {header.isPlaceholder ? null : canSort ? (
                         <button

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../shared/api/api-client.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
+import { useAppStore } from '../../shared/store/use-app-store.js';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
 const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
 // What the owner needs from a bill at a glance: is it paid?
@@ -34,6 +35,7 @@ export default function InvoiceManager() {
     [confirm, setConfirm] = useState(false);
   const { hasPermission } = usePermissions();
   const client = useQueryClient();
+  const addNotification = useAppStore((state) => state.addNotification);
   const canRead = hasPermission('invoices.read');
   const list = useQuery({
     queryKey: ['invoices', search, page],
@@ -66,10 +68,17 @@ export default function InvoiceManager() {
   });
   const cancel = useMutation({
     mutationFn: () => api.post(`/api/v1/invoices/${id}/cancel`, {}),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setConfirm(false);
-      client.invalidateQueries({ queryKey: ['invoice', id] });
-      client.invalidateQueries({ queryKey: ['invoices'] });
+      const advance = Number(result?.data?.advance_kept || 0);
+      addNotification(
+        advance > 0
+          ? `Bill cancelled. Stock is back. ₹${advance.toFixed(2)} already paid is kept as advance for this customer.`
+          : 'Bill cancelled. Stock is back and the sale is removed.',
+        'success',
+      );
+      for (const key of ['invoice', 'invoices', 'money-accounts', 'workshop-finance', 'dashboard'])
+        client.invalidateQueries({ queryKey: [key] });
     },
   });
   if (!canRead) return <p className="p-6">Invoice read permission required.</p>;
@@ -189,19 +198,33 @@ export default function InvoiceManager() {
               aria-label="Cancel invoice confirmation"
               className="rounded border border-red-400 p-4"
             >
-              <p>
-                This reverses invoice accounting and stock movements. Allocated payments and returns
-                must be reversed first.
+              <p className="mb-3">
+                Cancelling puts the parts back in stock and removes this sale from your accounts. If
+                the customer already paid, that money is kept as advance for them.
               </p>
-              <button disabled={cancel.isPending} onClick={() => cancel.mutate()}>
-                Confirm cancellation
-              </button>{' '}
-              <button disabled={cancel.isPending} onClick={() => setConfirm(false)}>
-                Keep invoice
-              </button>
+              <div className="flex gap-2">
+                <button
+                  className="rounded-lg bg-red-600 px-4 py-2 font-semibold text-white disabled:opacity-60"
+                  disabled={cancel.isPending}
+                  onClick={() => cancel.mutate()}
+                >
+                  Confirm cancellation
+                </button>
+                <button
+                  className="rounded-lg border px-4 py-2"
+                  disabled={cancel.isPending}
+                  onClick={() => setConfirm(false)}
+                >
+                  Keep invoice
+                </button>
+              </div>
             </section>
           )}
-          {cancel.error && <p role="alert">{cancel.error.message}</p>}
+          {cancel.error && (
+            <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-800">
+              {cancel.error.message}
+            </p>
+          )}
           <article
             id="invoice-print"
             className="space-y-5 rounded border bg-white p-6 text-gray-900"

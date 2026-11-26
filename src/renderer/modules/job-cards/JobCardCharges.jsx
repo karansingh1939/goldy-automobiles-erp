@@ -12,6 +12,13 @@ export default function JobCardCharges({ job, onRemove, removing }) {
   ];
   // Only show sections that have lines; four empty tables were noise.
   const filled = sections.filter(([, , rows]) => rows.length);
+  const lineTotal = (row) => {
+    const qty = Number(row.quantity ?? 1),
+      rate = Number(row.selling_price ?? row.labour_charge ?? 0),
+      tax = Number(row.gst_amount ?? (rate * qty * Number(row.gst_rate || 0)) / 100);
+    return Number(row.line_total ?? rate * qty + tax);
+  };
+  const total = [...parts, ...labour].reduce((sum, row) => sum + lineTotal(row), 0);
   if (!filled.length)
     return (
       <p className="rounded-lg border border-dashed border-gray-300 p-4 text-base text-gray-600 dark:border-gray-700 dark:text-gray-400">
@@ -54,7 +61,7 @@ export default function JobCardCharges({ job, onRemove, removing }) {
                       <td>
                         {money(tax)} ({row.gst_rate || 0}%)
                       </td>
-                      <td>{money(row.line_total ?? rate * qty + tax)}</td>
+                      <td>{money(lineTotal(row))}</td>
                       {canRemove && (
                         <td className="text-right">
                           <button
@@ -76,6 +83,9 @@ export default function JobCardCharges({ job, onRemove, removing }) {
           </div>
         </section>
       ))}
+      <p className="border-t pt-3 text-right text-lg font-semibold">
+        Total so far (with GST): {money(total)}
+      </p>
     </div>
   );
 }

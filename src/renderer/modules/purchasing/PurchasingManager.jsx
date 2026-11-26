@@ -191,13 +191,13 @@ export default function PurchasingManager() {
           <table className="w-full border-collapse text-left text-sm text-gray-500 dark:text-gray-400">
             <thead className="bg-gray-50 dark:bg-gray-800/50 text-gray-700 dark:text-gray-300 font-semibold border-b border-gray-200 dark:border-gray-800">
               <tr>
-                <th className="px-6 py-3">Receipt ID</th>
-                <th className="px-6 py-3">PO Reference</th>
-                <th className="px-6 py-3">Vendor</th>
-                <th className="px-6 py-3">Received Date</th>
-                <th className="px-6 py-3 text-right">Subtotal (₹)</th>
+                <th className="px-6 py-3">Bill no.</th>
+                <th className="px-6 py-3">From order</th>
+                <th className="px-6 py-3">Supplier</th>
+                <th className="px-6 py-3">Date</th>
+                <th className="px-6 py-3 text-right">Before GST (₹)</th>
                 <th className="px-6 py-3 text-right">GST (₹)</th>
-                <th className="px-6 py-3 text-right">Grand total (₹)</th>
+                <th className="px-6 py-3 text-right">Total (₹)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-800">

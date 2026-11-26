@@ -286,7 +286,7 @@ export async function runDesktopSmoke(window, backend, failures) {
     );
   }
   await execute(click, 'Save & update stock');
-  await until('posted receipt', hasText, 'Receipt details SMOKE-RECEIPT');
+  await until('posted receipt', hasText, 'Supplier bill SMOKE-RECEIPT');
   await until('receipt totals', hasText, '236.00');
   const receipt = db
     .prepare('SELECT * FROM purchase_receipts WHERE receipt_number = ?')
@@ -323,7 +323,7 @@ export async function runDesktopSmoke(window, backend, failures) {
     await execute(click, 'Supplier bills');
     await until('receipt screenshot row', hasText, 'SMOKE-RECEIPT');
     await execute(click, 'SMOKE-RECEIPT');
-    await until('receipt screenshot details', hasText, 'Receipt details SMOKE-RECEIPT');
+    await until('receipt screenshot details', hasText, 'Supplier bill SMOKE-RECEIPT');
     await until('receipt screenshot total', hasText, '236.00');
     await window.webContents.capturePage();
     await new Promise((resolve) => setTimeout(resolve, 500));

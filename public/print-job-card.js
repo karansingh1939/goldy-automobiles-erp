@@ -117,8 +117,11 @@ function renderPrintLayout(jc, customer, vehicle) {
   document.querySelector('#lbl-job-number').textContent = jc.job_card_number;
   document.querySelector('#lbl-job-date').textContent = new Date(
     jc.opened_at || jc.created_at,
-  ).toLocaleDateString();
-  document.querySelector('#lbl-job-status').textContent = jc.status;
+  ).toLocaleDateString('en-IN');
+  document.querySelector('#lbl-job-status').textContent =
+    { DRAFT: 'Open', IN_PROGRESS: 'Working', COMPLETED: 'Billed', CANCELLED: 'Cancelled' }[
+      jc.status
+    ] || jc.status;
   document.querySelector('#lbl-customer-name').textContent = customer.name;
   document.querySelector('#lbl-customer-phone').textContent = customer.phone;
   document.querySelector('#lbl-customer-address').textContent =
@@ -134,7 +137,7 @@ function renderPrintLayout(jc, customer, vehicle) {
   document.querySelector('#lbl-vehicle-chassis').textContent = vehicle.chassis_number || '-';
   document.querySelector('#lbl-fuel-level').textContent = jc.fuel_level || '-';
   document.querySelector('#lbl-promised-delivery').textContent = jc.promised_delivery_at
-    ? new Date(jc.promised_delivery_at).toLocaleString()
+    ? new Date(jc.promised_delivery_at).toLocaleString('en-IN')
     : '-';
   document.querySelector('#lbl-battery-brand').textContent = jc.battery_brand || '-';
   document.querySelector('#chk-toolkit').checked = !!jc.toolkit_present;

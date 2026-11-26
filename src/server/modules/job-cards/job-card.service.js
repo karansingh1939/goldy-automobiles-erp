@@ -6,6 +6,7 @@ import { AuditRepository } from '../audit/audit.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { JobCardRepository } from './job-card.repository.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
+import { releaseDocumentAllocations } from '../accounting/allocation.service.js';
 
 function number(value, fallback = 0) {
   const parsed = Number(value);
@@ -20,10 +21,6 @@ function required(value, label) {
   if (value === undefined || value === null || value === '') {
     throw new AppError(`${label} is required.`, 400, 'VALIDATION_ERROR');
   }
-}
-
-function code(prefix) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 }
 
 function normalizeDatabaseError(error) {
@@ -423,7 +420,9 @@ export class JobCardService {
     try {
       return this.repository.transaction(() => {
         const jobCardId = this.repository.createJobCard({
-          job_card_number: payload.job_card_number || code('JC'),
+          job_card_number:
+            payload.job_card_number ||
+            nextDocumentNumber(this.db, DocumentSeries.JOB_CARD, localDate()),
           customer_id: customerId,
           vehicle_id: vehicleId,
           status: 'DRAFT',
@@ -1001,17 +1000,21 @@ export class JobCardService {
           );
         }
 
-        const allocations = this.db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM receipt_allocations WHERE document_type = 'job_card_invoice' AND document_id = ?",
-          )
-          .get(invoice.id).n;
-        if (allocations || invoice.amount_paid > 0) {
+        // Money already paid on this bill stays with the customer as an advance.
+        const advanceKept = releaseDocumentAllocations(this.db, 'job_card_invoice', invoice.id);
+        if (money(number(invoice.amount_paid) - advanceKept) > 0) {
           throw new AppError(
-            'Cancel payment allocations before cancelling this invoice.',
+            'Some payment on this bill could not be matched. Ask for help before cancelling it.',
             400,
             'ACTIVE_ALLOCATIONS_EXIST',
           );
+        }
+        if (advanceKept > 0) {
+          this.db
+            .prepare(
+              "UPDATE invoices SET amount_paid = 0, payment_status = 'UNPAID', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            )
+            .run(invoice.id);
         }
         const returns = this.db
           .prepare(
@@ -1077,10 +1080,10 @@ export class JobCardService {
           entityType: 'invoices',
           entityId: invoice.id,
           oldValue: invoice,
-          newValue: cancelled,
+          newValue: { ...cancelled, advance_kept: advanceKept },
         });
 
-        return cancelled;
+        return { ...cancelled, advance_kept: advanceKept };
       });
     } catch (error) {
       throw normalizeDatabaseError(error);

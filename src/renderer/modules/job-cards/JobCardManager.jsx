@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import JobCardIntake from './JobCardIntake.jsx';
 import JobCardCharges from './JobCardCharges.jsx';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -130,6 +130,11 @@ export default function JobCardManager() {
     enabled: Boolean(partItemId) && showPartModal,
   });
   const batches = batchesQuery.data?.data || [];
+  const firstBatchInStock = batches.find((batch) => Number(batch.quantity) > 0)?.id;
+  // Pick the first batch that has stock so the owner does not have to.
+  useEffect(() => {
+    if (!batchId && firstBatchInStock) setBatchId(String(firstBatchInStock));
+  }, [batchId, firstBatchInStock]);
   const jobCards = jcResponse?.data || [];
 
   // Fetch Single Job Card detail
@@ -632,7 +637,10 @@ export default function JobCardManager() {
                   .filter(Boolean)
                   .join(', ') || 'None marked present'}
               </p>
-              <p>Assigned technician: {jcDetail.technician_name || 'Unassigned'}</p>
+              <p>
+                Mechanic:{' '}
+                {jcDetail.assigned_mechanic_name || jcDetail.technician_name || 'Not given yet'}
+              </p>
               <JobCardCharges
                 job={jcDetail}
                 removing={removeLineMutation.isPending}
@@ -792,7 +800,7 @@ export default function JobCardManager() {
                 />
               </div>
               <label htmlFor="modal-part-batch" className="block text-sm">
-                Warehouse / batch *
+                Store / batch *
               </label>
               <select
                 id="modal-part-batch"
@@ -855,7 +863,7 @@ export default function JobCardManager() {
                     htmlFor="modal-part-price"
                     className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
                   >
-                    Override Price (Optional)
+                    Price (₹)
                   </label>
                   <input
                     id="modal-part-price"

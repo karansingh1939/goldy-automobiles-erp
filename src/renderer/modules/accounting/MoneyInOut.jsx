@@ -103,6 +103,8 @@ function MoneyForm({ direction, accounts, onDone }) {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['money-accounts'] });
       client.invalidateQueries({ queryKey: ['workshop-finance'] });
+      for (const key of ['supplier-ledger', 'supplier-current-balance', 'invoices', 'dashboard'])
+        client.invalidateQueries({ queryKey: [key] });
       addNotification(
         direction === 'IN' ? 'Money received is saved.' : 'Money paid is saved.',
         'success',
@@ -421,10 +423,23 @@ export default function MoneyInOut() {
                   )}
                 </span>
               )}
-              <span className="font-semibold">{rupees(account.balance)}</span>
+              <span
+                className={`font-semibold ${Number(account.balance) < 0 ? 'text-red-600 dark:text-red-400' : ''}`}
+              >
+                {rupees(account.balance)}
+              </span>
             </li>
           ))}
         </ul>
+        {accounts.some((account) => Number(account.balance) < 0) && (
+          <p
+            role="alert"
+            className="rounded-lg bg-red-50 p-3 text-base text-red-800 dark:bg-red-950/40 dark:text-red-200"
+          >
+            Some money is shown below zero. A payment was probably entered from cash or a bank that
+            did not have that much. Check the last few entries, or add the starting balance below.
+          </p>
+        )}
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {

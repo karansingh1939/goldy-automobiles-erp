@@ -1,4 +1,5 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
@@ -358,7 +359,13 @@ export class PurchasingService {
     try {
       return this.repository.transaction(() => {
         const returnId = this.repository.createPurchaseReturn({
-          return_number: payload.return_number || code('PR'),
+          return_number:
+            payload.return_number ||
+            nextDocumentNumber(
+              this.db,
+              DocumentSeries.DEBIT_NOTE,
+              payload.return_date || localDate(),
+            ),
           purchase_id: payload.purchase_id || null,
           supplier_id: supplier.id,
           return_date: payload.return_date || localDate(),
@@ -544,6 +551,31 @@ export class PurchasingService {
     });
   }
 
+  /**
+   * A selling price typed on a supplier bill becomes the item's price, so the
+   * next job card charges what the owner just decided.
+   */
+  applyNewSellingPrice(item, userId) {
+    const current = this.db
+      .prepare('SELECT id, selling_price FROM inventory_items WHERE id = ?')
+      .get(item.item_id);
+    const price = money(item.selling_price);
+    if (!current || !(price > 0) || money(current.selling_price) === price) return;
+    this.db
+      .prepare(
+        'UPDATE inventory_items SET selling_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      )
+      .run(price, current.id);
+    this.auditRepository.create({
+      userId,
+      action: 'UPDATE',
+      entityType: 'inventory_items',
+      entityId: current.id,
+      oldValue: { selling_price: current.selling_price },
+      newValue: { selling_price: price, source: 'supplier bill' },
+    });
+  }
+
   createPurchaseItems({ source, sourceId, supplierId = null, items, userId = null }) {
     return items.reduce(
       (sum, item) => {
@@ -566,6 +598,8 @@ export class PurchasingService {
                 userId,
               })
             : null;
+
+        if (source === 'receipt') this.applyNewSellingPrice(item, userId);
 
         this.repository.createPurchaseItem({
           purchase_id: null,

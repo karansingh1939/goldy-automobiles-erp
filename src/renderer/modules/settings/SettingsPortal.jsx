@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatLocalTimestamp } from '../../shared/utils/date-time.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
@@ -53,6 +54,11 @@ export default function SettingsPortal() {
   });
 
   const backups = backupsResponse?.data || [];
+  const latestBackupAt = backups
+    .map((b) => b.created_at || b.timestamp)
+    .filter(Boolean)
+    .sort()
+    .pop();
 
   // Manual Backup Mutation
   const backupMutation = useMutation({
@@ -60,10 +66,7 @@ export default function SettingsPortal() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['backups-history'] });
       queryClient.invalidateQueries({ queryKey: ['backup-settings'] });
-      addNotification(
-        `Manual backup snapshot generated successfully: ${res.data.filename}`,
-        'success',
-      );
+      addNotification('Backup done. Your data is saved safely.', 'success');
       if (res.data.external?.status === 'FAILED') {
         addNotification(
           `Local backup saved. External copy failed: ${res.data.external.message}`,
@@ -133,8 +136,9 @@ export default function SettingsPortal() {
               onClick={() =>
                 useAppStore.getState().openDialog({
                   title: 'Restore latest backup?',
-                  message:
-                    'This replaces all current data with the last backup. Anything entered after that backup will be lost.',
+                  message: `This replaces all current data with the last backup${
+                    latestBackupAt ? ` (taken ${formatLocalTimestamp(latestBackupAt)})` : ''
+                  }. Anything entered after that backup will be lost.`,
                   onConfirm: () => restoreLatestMutation.mutate(),
                 })
               }

@@ -54,7 +54,7 @@ it('creates a return with the real invoice ID and its sold part and batch', asyn
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByRole('button', { name: 'New Return' }));
-  await screen.findByRole('option', { name: 'JC-7 (Owner: Workshop Customer)' });
+  await screen.findByRole('option', { name: /Bill JC-7 · Workshop Customer/ });
   fireEvent.change(screen.getByLabelText('Select Invoice *'), { target: { value: '7' } });
   await screen.findByRole('option', { name: 'Sold Filter (sold: 2)' });
   fireEvent.change(screen.getByLabelText('Select Returned Part *'), { target: { value: '64' } });

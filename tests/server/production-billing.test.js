@@ -82,7 +82,7 @@ test('counter sale costs match movements and cancellation restores every consume
   }
 });
 
-test('workshop interstate tax is posted as IGST and paid invoice cancellation is blocked', async () => {
+test('workshop interstate tax is posted as IGST and paid invoice cancellation keeps an advance', async () => {
   const c = await createTestContext();
   try {
     const jobs = new JobCardService(c.db);
@@ -109,11 +109,17 @@ test('workshop interstate tax is posted as IGST and paid invoice cancellation is
       createdBy: 1,
       autoAllocate: true,
     });
-    assert.throws(() => jobs.cancelInvoice(invoice.id, 1), /payment|allocation/i);
-    assert.equal(jobs.getInvoice(invoice.id).status, 'FINALIZED');
-    receipts.cancelReceipt(receipt.receiptId);
-    jobs.cancelInvoice(invoice.id, 1);
-    assert.equal(jobs.getInvoice(invoice.id).status, 'CANCELLED');
+    // Cancelling a paid bill keeps the money as the customer's advance.
+    const cancelled = jobs.cancelInvoice(invoice.id, 1);
+    assert.equal(cancelled.status, 'CANCELLED');
+    assert.equal(cancelled.advance_kept, 118);
+    assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM receipt_allocations').get().n, 0);
+    assert.equal(
+      c.db
+        .prepare('SELECT unallocated_amount FROM customer_receipts WHERE id = ?')
+        .get(receipt.receiptId).unallocated_amount,
+      118,
+    );
   } finally {
     await c.close();
   }

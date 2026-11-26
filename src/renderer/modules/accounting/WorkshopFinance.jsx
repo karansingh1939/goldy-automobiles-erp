@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatLocalTimestamp } from '../../shared/utils/date-time.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
@@ -78,13 +79,13 @@ export default function WorkshopFinance() {
       </header>
       <section className={panel} aria-label="Receivable ageing">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">Current receivable ageing</h2>
+          <h2 className="text-lg font-bold">Who owes you money</h2>
           <button
             className="rounded border px-3 py-2 text-sm"
             disabled={ageing.isFetching}
             onClick={() => ageing.refetch()}
           >
-            Refresh receivables
+            Refresh
           </button>
         </div>
         {ageing.isPending ? (
@@ -96,16 +97,15 @@ export default function WorkshopFinance() {
         ) : (
           <>
             <p className="text-sm">
-              Invoice age on {balances.date}. Current posted ledger credits reduce oldest unpaid
-              documents for this report only. Opening or unmatched ledger dues appear as unaged.
-              Ages are measured from invoice date, not payment terms.
+              As on {balances.date}, grouped by how many days the bill has been unpaid. Payments are
+              taken off the oldest bill first.
             </p>
             <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               {Object.entries({ ...balances.buckets, 'Total due': balances.totalDue }).map(
                 ([key, value]) => (
                   <div key={key} className="rounded border p-3 dark:border-gray-700">
                     <dt className="text-xs text-gray-500">
-                      {key === 'unaged' ? 'Unaged' : key === 'Total due' ? key : `${key} days`}
+                      {key === 'unaged' ? 'Old balance' : key === 'Total due' ? key : `${key} days`}
                     </dt>
                     <dd className="mt-1 font-semibold">{money(value)}</dd>
                   </div>
@@ -113,24 +113,24 @@ export default function WorkshopFinance() {
               )}
             </dl>
             <Table
-              caption="Outstanding invoices after current credits"
+              caption="Unpaid bills"
               columns={[
-                ['invoice_number', 'Invoice'],
+                ['invoice_number', 'Bill no.'],
                 ['customer_name', 'Customer'],
                 ['phone', 'Phone'],
                 ['invoice_date', 'Date'],
                 ['ageDays', 'Days unpaid'],
-                ['outstanding', 'Due', money],
+                ['outstanding', 'Still owed', money],
               ]}
               rows={balances.documents}
             />
             <h3 className="font-semibold">Customer balances</h3>
             <Table
-              caption="Current customer dues and credit balances"
+              caption="What each customer owes"
               columns={[
                 ['name', 'Customer'],
                 ['phone', 'Phone'],
-                ['due', 'Net due', money],
+                ['due', 'Owes you', money],
                 ['credit', 'Paid in advance', money],
                 ['unaged', 'Old balance', money],
               ]}
@@ -139,8 +139,8 @@ export default function WorkshopFinance() {
           </>
         )}
       </section>
-      <section className={panel} aria-label="Daily cash reconciliation">
-        <h2 className="text-lg font-bold">Daily cash reconciliation</h2>
+      <section className={panel} aria-label="Count today's cash">
+        <h2 className="text-lg font-bold">Count today&apos;s cash</h2>
         <label className="block text-sm">
           Cash count date
           <input
@@ -169,10 +169,10 @@ export default function WorkshopFinance() {
             <>
               <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {[
-                  ['Opening cash', book.opening],
+                  ['Cash at start of day', book.opening],
                   ['Cash in', book.cashIn],
                   ['Cash out', book.cashOut],
-                  ['Expected closing cash', book.expectedClosing],
+                  ['Should be in the drawer', book.expectedClosing],
                 ].map(([label, amount]) => (
                   <div key={label}>
                     <dt className="text-xs text-gray-500">{label}</dt>
@@ -191,7 +191,7 @@ export default function WorkshopFinance() {
                 >
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-sm">
-                      Counted cash (₹)
+                      Cash you counted (₹)
                       <input
                         className="block w-full rounded border p-2 dark:bg-gray-800"
                         type="number"
@@ -204,7 +204,7 @@ export default function WorkshopFinance() {
                       />
                     </label>
                     <label className="text-sm">
-                      Count notes
+                      Note (needed if it does not match)
                       <input
                         className="block w-full rounded border p-2 dark:bg-gray-800"
                         required={Boolean(
@@ -218,7 +218,7 @@ export default function WorkshopFinance() {
                   </div>
                   {countedCash !== '' && (
                     <p className="text-sm">
-                      Variance: {money(Number(countedCash) - book.expectedClosing)}
+                      Difference: {money(Number(countedCash) - book.expectedClosing)}
                     </p>
                   )}
                   <button
@@ -236,18 +236,16 @@ export default function WorkshopFinance() {
                 </form>
               )}
               <p className="text-xs text-gray-500">
-                Each count records the book balance at that moment. Later or backdated postings can
-                change the current book balance. Saving a count does not post an accounting
-                adjustment.
+                Saving a count only keeps a record. It does not change your accounts.
               </p>
               <Table
-                caption="Cash count history"
+                caption="Past cash counts"
                 columns={[
-                  ['counted_at', 'Recorded at'],
+                  ['counted_at', 'When', formatLocalTimestamp],
                   ['counted_by_name', 'Counted by'],
-                  ['expected_cash', 'Book at count', money],
+                  ['expected_cash', 'Should have been', money],
                   ['counted_cash', 'Counted', money],
-                  ['variance', 'Variance', money],
+                  ['variance', 'Difference', money],
                   ['notes', 'Notes'],
                 ]}
                 rows={book.counts}

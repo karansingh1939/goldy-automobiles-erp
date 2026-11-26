@@ -269,8 +269,8 @@ export default function ExpenseManager() {
               />
             </label>
             <p className="text-sm text-gray-500 sm:col-span-2">
-              Payment method is descriptive metadata. Expense vouchers currently post to cash in
-              hand; reconcile non-cash payments with your accountant.
+              Cash comes out of cash in hand. UPI, card and bank transfer come out of the bank you
+              choose.
             </p>
             <div className="flex gap-3">
               <button

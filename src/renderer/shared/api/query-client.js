@@ -6,7 +6,9 @@ export const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: false,
-      staleTime: 2 * 60 * 1000, // 2 minutes stale time
+      // The API runs on this laptop, so reloading is instant. Always show fresh
+      // numbers when a screen opens, e.g. Home right after a bill is cancelled.
+      staleTime: 0,
     },
     mutations: {
       onError: (error) => {

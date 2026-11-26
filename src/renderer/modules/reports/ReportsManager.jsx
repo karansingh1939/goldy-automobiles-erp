@@ -130,7 +130,7 @@ export default function ReportsManager() {
         [
           ['Company name', 'Goldy Automobiles Workshop ERP'],
           ['Report title', filename.replace(/_/g, ' ')],
-          ['Generated at', new Date().toLocaleString()],
+          ['Generated at', new Date().toLocaleString('en-IN')],
           [],
           headers,
           ...rows,
@@ -197,8 +197,6 @@ export default function ReportsManager() {
         }
       `}</style>
 
-      <Gstr1Downloads />
-
       {/* Header section */}
       <div className="flex items-center justify-between no-print">
         <div>
@@ -219,6 +217,10 @@ export default function ReportsManager() {
             Print Report
           </button>
         </div>
+      </div>
+
+      <div className="no-print">
+        <Gstr1Downloads />
       </div>
 
       {reportError && (
@@ -307,7 +309,7 @@ export default function ReportsManager() {
       <div className="hidden print:block border-b border-gray-450 pb-4 mb-6">
         <h2 className="text-xl font-bold">Goldy Automobiles Workshop ERP</h2>
         <p className="text-xs text-gray-500">Automated Accounting & Operations Ledger Statement</p>
-        <p className="text-xs text-gray-500">Date Compiled: {new Date().toLocaleString()}</p>
+        <p className="text-xs text-gray-500">Date Compiled: {new Date().toLocaleString('en-IN')}</p>
       </div>
 
       {/* TAB CONTAINER 1: Compliance & GSTR-1 */}
@@ -316,26 +318,26 @@ export default function ReportsManager() {
           <GstDetailReports dateFrom={startDate} dateTo={endDate} />
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 no-print">
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
-              <p className="text-xs font-semibold text-gray-500 uppercase">Taxable Turn-over</p>
+              <p className="text-sm font-semibold text-gray-600">Sales before GST</p>
               <p className="text-xl font-bold text-gray-950 dark:text-white mt-1">
                 ₹{gst.taxableValue?.toLocaleString('en-IN') || '0.00'}
               </p>
             </div>
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
-              <p className="text-xs font-semibold text-gray-500 uppercase">CGST Collected</p>
+              <p className="text-sm font-semibold text-gray-600">CGST collected</p>
               <p className="text-xl font-bold text-gray-950 dark:text-white mt-1">
                 ₹{gst.cgstAmount?.toLocaleString('en-IN') || '0.00'}
               </p>
             </div>
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
-              <p className="text-xs font-semibold text-gray-500 uppercase">SGST Collected</p>
+              <p className="text-sm font-semibold text-gray-600">SGST collected</p>
               <p className="text-xl font-bold text-gray-950 dark:text-white mt-1">
                 ₹{gst.sgstAmount?.toLocaleString('en-IN') || '0.00'}
               </p>
             </div>
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm bg-gradient-to-br from-brand-50 to-white dark:from-brand-950/20 dark:to-gray-900">
-              <p className="text-xs font-bold text-brand-600 dark:text-brand-400 uppercase">
-                Total GST Liabilities
+              <p className="text-sm font-bold text-brand-600 dark:text-brand-400">
+                Total GST on sales
               </p>
               <p className="text-xl font-black text-brand-600 dark:text-brand-400 mt-1">
                 ₹{gst.totalTax?.toLocaleString('en-IN') || '0.00'}

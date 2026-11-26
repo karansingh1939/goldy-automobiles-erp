@@ -229,7 +229,9 @@ export class JobCardRepository {
         vehicles.registration_number,
         vehicles.engine_number,
         vehicles.chassis_number,
-        COALESCE(technicians.full_name, users.name) AS assigned_mechanic_name
+        COALESCE(technicians.full_name, users.name) AS assigned_mechanic_name,
+        (SELECT invoice_number FROM invoices
+          WHERE invoices.job_card_id = job_cards.id ORDER BY invoices.id DESC LIMIT 1) AS invoice_number
       FROM job_cards
       JOIN customers ON customers.id = job_cards.customer_id
       JOIN vehicles ON vehicles.id = job_cards.vehicle_id

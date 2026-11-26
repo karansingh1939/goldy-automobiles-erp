@@ -271,6 +271,7 @@ export default function Layout() {
               }}
               className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 dark:text-gray-400 dark:hover:text-red-400 dark:hover:bg-red-900/30 rounded-lg transition-colors"
               title="Sign Out"
+              aria-label="Sign Out"
             >
               <LogOut className="h-4.5 w-4.5" />
             </button>

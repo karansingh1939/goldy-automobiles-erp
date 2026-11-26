@@ -14,7 +14,8 @@ export default function ServiceHistory() {
     queryFn: ({ signal }) => api.get(`/api/v1/vehicles/${vehicleId}/service-history`, { signal }),
     enabled: Boolean(vehicleId) && hasPermission('vehicles.read'),
   });
-  const data = history.data?.data;
+  // The API returns the history object itself (no { data } wrapper).
+  const data = history.data?.vehicle ? history.data : history.data?.data;
   if (!hasPermission('vehicles.read'))
     return <p className="p-6">Vehicle read permission required.</p>;
   return (

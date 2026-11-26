@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatLocalTimestamp } from '../../shared/utils/date-time.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { invalidateInventory } from '../../shared/api/inventory-cache.js';
@@ -67,6 +68,19 @@ const COLUMN_LABELS = {
   reorder_level: 'Reorder at',
   is_active: 'Active',
   warehouse_name: 'Godown',
+  verification_number: 'Count no.',
+  verification_type: 'Counted',
+  batch_number: 'Batch',
+  previous_quantity: 'Was in stock',
+  counted_quantity: 'Counted',
+  verified_by_name: 'Counted by',
+  verified_at: 'When',
+  created_at: 'When',
+};
+const STATUS_WORDS = {
+  PENDING: 'Waiting for approval',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
 };
 const MONEY_FIELD = /(cost|price|amount|total|value|valuation)$/;
 const rupees = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' });
@@ -76,6 +90,8 @@ const rupees = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'IN
 export function formatCell(field, value) {
   if (value === null || value === undefined || value === '') return '—';
   if (/^is_/.test(field)) return Number(value) ? 'Yes' : 'No';
+  if (field === 'status' && STATUS_WORDS[value]) return STATUS_WORDS[value];
+  if (/_at$/.test(field)) return formatLocalTimestamp(value);
   if (MONEY_FIELD.test(field) && Number.isFinite(Number(value)))
     return rupees.format(Number(value));
   return String(value);

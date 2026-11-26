@@ -129,7 +129,7 @@ it('posts selected batch and outside labour charge using the backend contract', 
   await screen.findByRole('option', { name: /Oil/ });
   fireEvent.change(screen.getByLabelText('Select Part *'), { target: { value: '3' } });
   await screen.findByRole('option', { name: /B-8/ });
-  fireEvent.change(screen.getByLabelText('Warehouse / batch *'), { target: { value: '8' } });
+  fireEvent.change(screen.getByLabelText('Store / batch *'), { target: { value: '8' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Part' }));
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith('/api/v1/job-cards/1/parts', {

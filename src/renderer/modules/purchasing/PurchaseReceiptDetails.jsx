@@ -17,9 +17,9 @@ export default function PurchaseReceiptDetails({ id, onClose }) {
   return (
     <section className="space-y-3 rounded-xl border p-4">
       <div className="flex gap-3">
-        <h2 className="text-lg font-semibold">Receipt details {receipt?.receipt_number}</h2>
+        <h2 className="text-lg font-semibold">Supplier bill {receipt?.receipt_number}</h2>
         <button type="button" onClick={onClose}>
-          Close receipt
+          Close
         </button>
       </div>
       {query.error && (
@@ -32,7 +32,7 @@ export default function PurchaseReceiptDetails({ id, onClose }) {
       {receipt && (
         <>
           <p>
-            {receipt.receipt_date} · {receipt.status} ·{' '}
+            {receipt.receipt_date} ·{' '}
             {supplier.data?.data?.name || `Supplier #${receipt.supplier_id}`} · GSTIN{' '}
             {supplier.data?.data?.gstin || 'Unregistered'}
           </p>
@@ -42,20 +42,20 @@ export default function PurchaseReceiptDetails({ id, onClose }) {
             enablePagination={false}
             data={receipt.items || []}
             columns={[
-              'item_name',
-              'sku',
-              'warehouse_name',
-              'batch_number',
-              'quantity',
-              'purchase_cost',
-              'selling_price',
-              'gst_rate',
-              'gst_amount',
-              'line_total',
-            ].map((key) => ({ accessorKey: key, header: key.replaceAll('_', ' ') }))}
+              ['item_name', 'Item'],
+              ['sku', 'Code'],
+              ['warehouse_name', 'Store'],
+              ['batch_number', 'Batch'],
+              ['quantity', 'Qty'],
+              ['purchase_cost', 'Cost (₹)'],
+              ['selling_price', 'Selling price (₹)'],
+              ['gst_rate', 'GST %'],
+              ['gst_amount', 'GST (₹)'],
+              ['line_total', 'Total (₹)'],
+            ].map(([key, header]) => ({ accessorKey: key, header }))}
           />
           <p>
-            Subtotal ₹{Number(receipt.subtotal).toFixed(2)} · GST ₹
+            Before GST ₹{Number(receipt.subtotal).toFixed(2)} · GST ₹
             {Number(receipt.gst_total).toFixed(2)} · Total ₹{Number(receipt.grand_total).toFixed(2)}
           </p>
         </>

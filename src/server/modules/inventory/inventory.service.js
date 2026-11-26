@@ -2057,10 +2057,17 @@ export class InventoryService {
       SELECT 
         COUNT(*) AS totalItems,
         SUM(current_quantity * average_cost) AS totalValue,
-        SUM(CASE WHEN current_quantity <= reorder_level THEN 1 ELSE 0 END) AS lowStockCount,
-        SUM(CASE WHEN current_quantity = 0 THEN 1 ELSE 0 END) AS outOfStockCount
-      FROM inventory_items
-      WHERE is_active = 1
+        -- Count only items the workshop has actually bought; the starter catalogue
+        -- of never-stocked items is not "low" or "out of stock".
+        SUM(CASE WHEN bought AND reorder_level > 0 AND current_quantity <= reorder_level
+          THEN 1 ELSE 0 END) AS lowStockCount,
+        SUM(CASE WHEN bought AND current_quantity <= 0 THEN 1 ELSE 0 END) AS outOfStockCount
+      FROM (
+        SELECT inventory_items.*,
+          EXISTS (SELECT 1 FROM inventory_batches b WHERE b.item_id = inventory_items.id) AS bought
+        FROM inventory_items
+        WHERE is_active = 1
+      )
     `,
       )
       .get();

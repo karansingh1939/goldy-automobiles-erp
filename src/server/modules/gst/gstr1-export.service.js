@@ -10,6 +10,12 @@ import { stateCodeFor } from '../settings/company-settings.js';
 
 // Byte-order mark so Excel opens the CSV as UTF-8 (₹ and Hindi names).
 const BOM = String.fromCharCode(0xfeff);
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** The GST offline tool reads dates as dd-mmm-yyyy, e.g. 26-Nov-2026. */
+const gstDate = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
+  return match ? `${match[3]}-${MONTHS[Number(match[2]) - 1]}-${match[1]}` : value;
+};
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 const pos = (state, fallback) => {
   const name = state || fallback || '';
@@ -131,7 +137,7 @@ export class Gstr1ExportService {
         'GSTIN of Recipient': row.customerGstin,
         'Receiver Name': row.customerName,
         'Invoice Number': row.invoiceNumber,
-        'Invoice date': row.invoiceDate,
+        'Invoice date': gstDate(row.invoiceDate),
         'Invoice Value': 0,
         'Place Of Supply': pos(row.placeOfSupply, companyState),
         'Reverse Charge': 'N',
@@ -187,7 +193,7 @@ export class Gstr1ExportService {
         'GSTIN of Recipient': row.customerGstin || '',
         'Receiver Name': row.customerName,
         'Note Number': row.invoiceNumber,
-        'Note Date': row.invoiceDate,
+        'Note Date': gstDate(row.invoiceDate),
         'Original Invoice Number': row.originalInvoiceNumber || '',
         'Note Value': 0,
         'Place Of Supply': pos(row.placeOfSupply, companyState),
@@ -238,11 +244,17 @@ export class Gstr1ExportService {
 
   /** Table 13: invoice series issued in the period, including cancelled ones. */
   documentsIssued({ dateFrom, dateTo }) {
-    const series = (table, nature) =>
+    const series = (
+      table,
+      nature,
+      numberColumn = 'invoice_number',
+      dateColumn = 'invoice_date',
+      extraWhere = '',
+    ) =>
       this.db
         .prepare(
-          `SELECT invoice_number, status FROM ${table}
-           WHERE invoice_date BETWEEN ? AND ? AND invoice_number LIKE '%/%/%' ORDER BY invoice_number`,
+          `SELECT ${numberColumn} AS invoice_number, status FROM ${table}
+           WHERE ${dateColumn} BETWEEN ? AND ? AND ${numberColumn} LIKE '%/%/%' ${extraWhere} ORDER BY ${numberColumn}`,
         )
         .all(dateFrom, dateTo)
         .reduce((groups, row) => {
@@ -253,6 +265,14 @@ export class Gstr1ExportService {
     const groups = {
       ...series('invoices', 'Invoices for outward supply'),
       ...series('direct_invoices', 'Invoices for outward supply'),
+      // Draft returns are not issued yet.
+      ...series(
+        'customer_returns',
+        'Credit Note',
+        'return_number',
+        'return_date',
+        "AND status <> 'DRAFT'",
+      ),
     };
     return Object.entries(groups).map(([prefix, { nature, rows }]) => {
       const cancelled = rows.filter((row) => row.status === 'CANCELLED').length;

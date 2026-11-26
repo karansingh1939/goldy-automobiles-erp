@@ -109,8 +109,8 @@ export default function JobCardIntake({
             <div className="space-y-6 md:pr-6">
               {/* Customer Section */}
               <div className="space-y-3">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <User className="h-4 w-4 text-brand-500" /> Customer Information
+                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-1.5">
+                  <User className="h-4 w-4 text-brand-500" /> Customer
                 </h4>
 
                 <div className="grid grid-cols-2 gap-3 bg-gray-50/50 dark:bg-gray-850/20 p-4 border border-gray-150 dark:border-gray-805 rounded-xl">
@@ -213,8 +213,8 @@ export default function JobCardIntake({
 
               {/* Vehicle Section */}
               <div className="space-y-3 pt-2">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Car className="h-4 w-4 text-brand-500" /> Vehicle Information
+                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-1.5">
+                  <Car className="h-4 w-4 text-brand-500" /> Car
                 </h4>
 
                 {isExistingCustomer && existingCustomerVehicles.length > 0 && (
@@ -418,7 +418,7 @@ export default function JobCardIntake({
             {/* Column 2: Service & Accessories */}
             <div className="space-y-6 md:pl-6 pt-6 md:pt-0">
               <div className="space-y-3">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-1.5">
                   <Wrench className="h-4 w-4 text-brand-500" /> Service Details
                 </h4>
 
@@ -484,8 +484,8 @@ export default function JobCardIntake({
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  Accessories Checklist
+                <label className="block text-sm font-semibold text-gray-600 dark:text-gray-300">
+                  Things in the car
                 </label>
                 <div className="grid grid-cols-2 gap-2 bg-gray-50/50 dark:bg-gray-850/20 p-4 border border-gray-150 dark:border-gray-850 rounded-xl text-xs font-semibold text-gray-650">
                   <label className="flex items-center gap-2 select-none cursor-pointer">
@@ -533,7 +533,7 @@ export default function JobCardIntake({
                     htmlFor="modal-jc-mechanic"
                     className="block text-xs font-semibold text-gray-650 dark:text-gray-400"
                   >
-                    Assigned Technician
+                    Mechanic (optional)
                   </label>
                   <RemoteSelect
                     id="modal-jc-mechanic"
@@ -542,8 +542,12 @@ export default function JobCardIntake({
                     value={technicianId}
                     onChange={setTechnicianId}
                     required={false}
-                    searchLabel="Search technicians"
-                    optionLabel={(t) => `${t.name} (${t.specialization || 'Mechanic'})`}
+                    searchLabel="Search mechanics"
+                    optionLabel={(t) =>
+                      t.specialization
+                        ? `${t.full_name || t.name} (${t.specialization})`
+                        : t.full_name || t.name
+                    }
                   />
                 </div>
 

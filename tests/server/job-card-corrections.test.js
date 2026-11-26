@@ -77,7 +77,12 @@ test('staff can remove a wrong line and cancel an unbilled job without using an 
       body: JSON.stringify({ description: 'Late', labour_charge: 100, gst_rate: 18 }),
     });
     assert.equal(locked.response.status, 400);
-    assert.equal(context.db.prepare('SELECT COUNT(*) AS n FROM document_sequences').get().n, 0);
+    // The job card has its own JC number; no tax invoice number was used up.
+    assert.equal(
+      context.db.prepare("SELECT COUNT(*) AS n FROM document_sequences WHERE series = 'INV'").get()
+        .n,
+      0,
+    );
     assert.ok(
       context.db
         .prepare("SELECT 1 FROM audit_logs WHERE entity_type = 'job_cards' AND action = 'CANCEL'")

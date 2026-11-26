@@ -61,6 +61,31 @@ export class MasterRepository {
       return { rows, total };
     }
 
+    if (this.config.table === 'vehicles') {
+      // Show and search by the owner's name, not just the customer id.
+      const columns = [
+        ...this.config.searchableColumns.map((column) => `vehicles.${column}`),
+        'customers.name',
+        'customers.phone',
+      ];
+      const where = search
+        ? `WHERE ${columns.map((column) => `${column} LIKE ? COLLATE NOCASE`).join(' OR ')}`
+        : '';
+      const params = search ? columns.map(() => `%${search}%`) : [];
+      const from = 'FROM vehicles LEFT JOIN customers ON customers.id = vehicles.customer_id';
+      const selectCols = this.config.listColumns.map((col) => `vehicles.${col}`).join(', ');
+      const rows = this.db
+        .prepare(
+          `SELECT ${selectCols}, customers.name AS customer_name ${from} ${where}
+           ORDER BY vehicles.id DESC LIMIT ? OFFSET ?`,
+        )
+        .all(...params, pageSize, offset);
+      const total = this.db
+        .prepare(`SELECT COUNT(*) AS count ${from} ${where}`)
+        .get(...params).count;
+      return { rows, total };
+    }
+
     const { clause, params } = searchWhere(this.config, search);
     const selectCols = this.config.listColumns
       .map((col) => `${this.config.table}.${col}`)

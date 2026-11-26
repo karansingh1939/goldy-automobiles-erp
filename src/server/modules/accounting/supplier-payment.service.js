@@ -4,6 +4,21 @@ function roundMoney(val) {
   return Math.round(val * 100) / 100;
 }
 
+/** Keeps the Supplier Ledger screen (supplier_ledgers) in step with payments. */
+function recordSupplierLedger(db, { supplierId, date, paymentId, debit, credit, notes, userId }) {
+  const last = db
+    .prepare(
+      'SELECT balance_after FROM supplier_ledgers WHERE supplier_id = ? ORDER BY id DESC LIMIT 1',
+    )
+    .get(supplierId);
+  const balance = roundMoney(Number(last?.balance_after || 0) + credit - debit);
+  db.prepare(
+    `INSERT INTO supplier_ledgers
+       (supplier_id, entry_date, entry_type, reference_type, reference_id, debit, credit, balance_after, notes, created_by)
+     VALUES (?, ?, 'Payment', 'supplier_payments', ?, ?, ?, ?, ?, ?)`,
+  ).run(supplierId, date, paymentId, debit, credit, balance, notes || null, userId || null);
+}
+
 /**
  * Service to manage Supplier Payments, payment vouchers, and allocations.
  */
@@ -159,6 +174,16 @@ export class SupplierPaymentService {
         )
         .run(paymentId, voucher.voucherId);
 
+      recordSupplierLedger(this.db, {
+        supplierId,
+        date: paymentDate,
+        paymentId,
+        debit: payAmount,
+        credit: 0,
+        notes: narration || `Payment ${paymentNumber}`,
+        userId: createdBy,
+      });
+
       // 5. Trigger FIFO Allocation matching if selected
       if (autoAllocate) {
         this.allocationService.allocateFIFO(
@@ -263,6 +288,16 @@ export class SupplierPaymentService {
 
       // 2. Rollback invoice allocations (sets bills back to UNPAID/PARTIAL)
       this.allocationService.cancelAllocations('SUPPLIER', id);
+
+      recordSupplierLedger(this.db, {
+        supplierId: payment.supplier_id,
+        date: payment.payment_date,
+        paymentId: id,
+        debit: 0,
+        credit: roundMoney(Number(payment.amount)),
+        notes: `Payment ${payment.payment_number} cancelled`,
+        userId: null,
+      });
 
       // 3. Mark payment header as CANCELLED and unallocated = 0
       this.db

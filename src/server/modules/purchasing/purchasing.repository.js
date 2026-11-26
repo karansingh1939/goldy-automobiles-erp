@@ -465,7 +465,15 @@ export class PurchasingRepository {
     const data = this.db
       .prepare(
         `
-      SELECT *
+      SELECT supplier_ledgers.*,
+        CASE supplier_ledgers.reference_type
+          WHEN 'purchase_receipts' THEN 'Bill ' ||
+            (SELECT receipt_number FROM purchase_receipts WHERE id = supplier_ledgers.reference_id)
+          WHEN 'purchase_returns' THEN 'Return ' ||
+            (SELECT return_number FROM purchase_returns WHERE id = supplier_ledgers.reference_id)
+          WHEN 'supplier_payments' THEN 'Payment ' ||
+            (SELECT payment_number FROM supplier_payments WHERE id = supplier_ledgers.reference_id)
+        END AS reference_label
       FROM supplier_ledgers
       WHERE ${where}
       ORDER BY id DESC

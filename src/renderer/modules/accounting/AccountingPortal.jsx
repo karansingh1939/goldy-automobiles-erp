@@ -306,13 +306,21 @@ export default function AccountingPortal() {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800 font-mono text-xs">
                 {vouchers.map((v) => (
-                  <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-850">
+                  <tr
+                    key={v.id}
+                    className={`hover:bg-gray-50 dark:hover:bg-gray-850 ${v.status === 'CANCELLED' ? 'text-gray-400 line-through' : ''}`}
+                  >
                     <td className="px-6 py-3.5 font-sans text-sm">{v.voucher_date}</td>
                     <td className="px-6 py-3.5 font-bold text-gray-950 dark:text-white">
                       {v.voucher_number}
                     </td>
                     <td className="px-6 py-3.5 capitalize font-sans font-semibold">
                       {v.voucher_type}
+                      {v.status === 'CANCELLED' && (
+                        <span className="ml-2 inline-block no-underline text-red-600">
+                          Cancelled
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-3.5 font-sans truncate max-w-xs">
                       {v.narration || '-'}

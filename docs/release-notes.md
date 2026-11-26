@@ -1,5 +1,18 @@
 # Release Notes - GOLDY AUTOMOBILE ERP
 
+## Unreleased — hands-on click-through fixes, 26 November 2026
+
+- Supplier payments from Money Out now lower the supplier's balance on the Supplier Ledger (they reached the accounts but not that screen).
+- A selling price typed on a supplier bill becomes the item's price, so job cards charge it.
+- Cancelling a paid bill works: stock and sale are reversed and the money paid is kept as the customer's advance. Errors now show on screen.
+- Screens always show fresh numbers (Home no longer shows a cancelled sale until restart).
+- Mechanic names in the job card picker and on the job card; running total while adding parts and labour; the batch with stock is picked automatically.
+- Short numbers: job cards `JC/26-27/0001`, credit notes `CN/…`, debit notes `DN/…`; credit notes listed in GSTR-1 documents issued; GSTR-1 dates as `26-Nov-2026`.
+- Service History screen (and the job card's "Vehicle service history" button) shows the history again.
+- Vehicle list shows and searches by owner name; stock reports ignore never-bought catalogue items.
+- Plainer words and local times on Dues & Daily Cash, Buy Stock, Supplier Ledger, Reports, Stock Count, Audit Log and Home; Indian date format on the printed job card; warning when cash or bank goes below zero; restore warning says when the backup was taken.
+- Verification: 253 backend tests, 79 renderer tests, desktop smoke, click-through of every screen. Details: [click-through report](reviews/clickthrough-2026-11-26.md).
+
 ## Unreleased — Tally replacement phase 2, 11 November 2026
 
 - Home screen backup health (failed, older than 2 days, USB copy problems) with "Back up now"; copy-to-USB prompt when closing.

@@ -76,9 +76,7 @@ export function TopServicesCard({ services, isLoading }) {
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col min-h-[380px]">
-      <h2 className="text-lg font-bold text-gray-900 mb-4 tracking-tight">
-        Top Services Performed
-      </h2>
+      <h2 className="text-lg font-bold text-gray-900 mb-4 tracking-tight">Most common jobs</h2>
 
       <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-6">
         {isLoading ? (
