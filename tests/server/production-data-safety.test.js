@@ -5,21 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createTestContext } from './helpers.js';
-import { DemoController } from '../../src/server/modules/demo/demo.controller.js';
-import { BackupController } from '../../src/server/modules/backup/backup.controller.js';
 import { BackupService } from '../../src/server/modules/backup/backup.service.js';
 import { BackupService as StartupBackupService } from '../../src/server/database/backup-service.js';
 import { RestoreService } from '../../src/server/modules/restore/restore.service.js';
-import {
-  closeDatabase,
-  createDatabase,
-  getDatabase,
-  demoDbFile,
-  toggleDemoMode,
-} from '../../src/server/database/connection.js';
-import { runMigrations } from '../../src/server/database/migration-runner.js';
-import { runSeeds } from '../../src/server/database/seed-runner.js';
-import { seedDemoDatabase } from '../../src/server/database/demo-seeder.js';
+import { closeDatabase, createDatabase } from '../../src/server/database/connection.js';
 import {
   CorruptionRecoveryService,
   RecoveryStatus,
@@ -28,25 +17,6 @@ import {
   IntegrityCheckService,
   HealthState,
 } from '../../src/server/database/integrity-check-service.js';
-
-function response() {
-  return {
-    statusCode: 200,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    setHeader() {},
-    json(body) {
-      this.body = body;
-      return this;
-    },
-    send(body) {
-      this.body = JSON.parse(body);
-      return this;
-    },
-  };
-}
 
 test('maintenance routes reject non-admin even when granted backup permission', async () => {
   const context = await createTestContext();
@@ -68,88 +38,13 @@ test('maintenance routes reject non-admin even when granted backup permission', 
       method: 'POST',
       body: JSON.stringify({ username: 'maintenance-mechanic', password: 'Admin@12345' }),
     });
-    for (const [endpoint, method] of [
-      ['demo/export', 'GET'],
-      ['demo/import', 'POST'],
-      ['demo/toggle', 'POST'],
-      ['backups/manual', 'POST'],
-      ['backups/purge-demo', 'POST'],
-    ]) {
+    for (const [endpoint, method] of [['backups/manual', 'POST']]) {
       const result = await context.request(`/api/v1/${endpoint}`, {
         method,
         headers: { Authorization: `Bearer ${login.body.token}` },
         ...(method === 'POST' ? { body: JSON.stringify({ enable: false, customers: [] }) } : {}),
       });
       assert.equal(result.response.status, 403, endpoint);
-    }
-  } finally {
-    await context.close();
-  }
-});
-
-test('JSON import and heuristic demo purge cannot alter production', async () => {
-  const context = await createTestContext();
-  try {
-    const supplier = context.db
-      .prepare("INSERT INTO suppliers (name) VALUES ('Real supplier')")
-      .run();
-    const settingsBefore = context.db.prepare('SELECT * FROM system_settings ORDER BY key').all();
-    let error;
-    const res = response();
-    await new DemoController(context.db).importJsonData(
-      { body: { system_settings: [] } },
-      res,
-      (err) => {
-        error = err;
-      },
-    );
-    assert.ok(error || res.statusCode >= 400);
-    assert.deepEqual(
-      context.db.prepare('SELECT * FROM system_settings ORDER BY key').all(),
-      settingsBefore,
-    );
-    error = undefined;
-    await new BackupController(new BackupService(context.db)).purgeDemoData(
-      {},
-      response(),
-      (err) => {
-        error = err;
-      },
-    );
-    assert.ok(error);
-    assert.equal(
-      context.db.prepare('SELECT name FROM suppliers WHERE id = ?').get(supplier.lastInsertRowid)
-        .name,
-      'Real supplier',
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test('business JSON export excludes credentials and database control tables', async () => {
-  const context = await createTestContext();
-  try {
-    context.db.exec('CREATE TABLE unexpected_secrets (password_hash TEXT)');
-    const res = response();
-    await new DemoController(context.db).exportJsonData({}, res, (err) => {
-      throw err;
-    });
-    assert.ok(Array.isArray(res.body.customers));
-    for (const table of [
-      'users',
-      'user_sessions',
-      'roles',
-      'permissions',
-      'role_permissions',
-      'system_settings',
-      'schema_migrations',
-      'backup_logs',
-      'restore_logs',
-      'audit_logs',
-      'unexpected_secrets',
-    ]) {
-      assert.equal(res.body[table], undefined, table);
     }
   } finally {
     await context.close();
@@ -312,104 +207,6 @@ test('restore rolls back when the success audit write fails', async () => {
   } finally {
     closeDatabase();
     await context.close();
-  }
-});
-
-test('demo initialize, clear and reset preserve production and leave a valid demo database', async () => {
-  assert.ok(process.env.DATABASE_PATH, 'Run with an isolated DATABASE_PATH');
-  const production = getDatabase();
-  runMigrations(production);
-  await runSeeds(production);
-  production
-    .prepare("INSERT INTO customers (name) VALUES ('Production survives demo maintenance')")
-    .run();
-  const proxy = new Proxy(
-    {},
-    {
-      get(target, key) {
-        const active = getDatabase();
-        const value = active[key];
-        return typeof value === 'function' ? value.bind(active) : value;
-      },
-    },
-  );
-  const controller = new DemoController(proxy);
-  const next = (error) => {
-    throw error;
-  };
-  try {
-    await assert.rejects(seedDemoDatabase(production), /marked demo database/);
-    await controller.toggleMode({ body: { enable: true } }, response(), next);
-    assert.equal(path.resolve(getDatabase().name), path.resolve(demoDbFile));
-    assert.equal(getDatabase().pragma('foreign_key_check').length, 0);
-    assert.ok(getDatabase().prepare('SELECT COUNT(*) AS count FROM customers').get().count > 0);
-    const before = getDatabase().prepare('SELECT COUNT(*) AS count FROM invoice_items').get().count;
-    const stock = getDatabase()
-      .prepare('SELECT SUM(quantity) AS quantity FROM inventory_batches')
-      .get().quantity;
-    const vouchers = getDatabase().prepare('SELECT COUNT(*) AS count FROM vouchers').get().count;
-    await controller.loadData({}, response(), next);
-    await controller.loadData({}, response(), next);
-    assert.equal(
-      getDatabase().prepare('SELECT COUNT(*) AS count FROM invoice_items').get().count,
-      before,
-    );
-    assert.equal(
-      getDatabase().prepare('SELECT SUM(quantity) AS quantity FROM inventory_batches').get()
-        .quantity,
-      stock,
-    );
-    assert.equal(
-      getDatabase().prepare('SELECT COUNT(*) AS count FROM vouchers').get().count,
-      vouchers,
-    );
-    const demoIncome = getDatabase()
-      .prepare(
-        `SELECT SUM(CASE WHEN j.entry_type = 'CREDIT' THEN j.amount ELSE -j.amount END) AS total
-      FROM journal_entries j JOIN ledgers l ON l.id = j.ledger_id WHERE l.system_key IN ('parts_sales', 'labour_sales')`,
-      )
-      .get().total;
-    assert.equal(demoIncome, 3145);
-    await controller.clearData({}, response(), next);
-    assert.equal(getDatabase().prepare('SELECT COUNT(*) AS count FROM customers').get().count, 0);
-    assert.equal(
-      getDatabase().prepare("SELECT value FROM system_settings WHERE key = 'database.mode'").get()
-        .value,
-      'demo',
-    );
-    await controller.resetDb({}, response(), next);
-    assert.ok(getDatabase().prepare('SELECT COUNT(*) AS count FROM customers').get().count > 0);
-    toggleDemoMode(false);
-    assert.equal(
-      getDatabase()
-        .prepare("SELECT name FROM customers WHERE name = 'Production survives demo maintenance'")
-        .get().name,
-      'Production survives demo maintenance',
-    );
-    const originalRename = fs.renameSync;
-    try {
-      fs.renameSync = (source, destination) => {
-        if (String(destination).endsWith('app_config.json'))
-          throw new Error('Simulated mode config failure');
-        return originalRename(source, destination);
-      };
-      assert.throws(
-        () => toggleDemoMode(true),
-        (error) => error.code === 'CONFIG_WRITE_FAILED',
-      );
-      assert.equal(
-        getDatabase()
-          .prepare("SELECT name FROM customers WHERE name = 'Production survives demo maintenance'")
-          .get().name,
-        'Production survives demo maintenance',
-      );
-      assert.equal(getDatabase().name.endsWith('_demo.sqlite'), false);
-    } finally {
-      fs.renameSync = originalRename;
-    }
-  } finally {
-    toggleDemoMode(false);
-    closeDatabase();
   }
 });
 

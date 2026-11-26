@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CustomerManager from '../../src/renderer/modules/customers/CustomerManager.jsx';
 import VehicleManager from '../../src/renderer/modules/vehicles/VehicleManager.jsx';
-import SalesOrderManager from '../../src/renderer/modules/sales/SalesOrderManager.jsx';
+import CounterSale from '../../src/renderer/modules/sales/CounterSale.jsx';
 import PurchasingManager from '../../src/renderer/modules/purchasing/PurchasingManager.jsx';
 import JobCardManager from '../../src/renderer/modules/job-cards/JobCardManager.jsx';
 import { useAppStore } from '../../src/renderer/shared/store/use-app-store.js';
@@ -31,14 +31,14 @@ function response(data, status = 200) {
 it('disables write actions for a user with read access only', async () => {
   useAppStore.getState().setToken('read-session', {
     role: { name: 'Viewer' },
-    permissions: ['sales_orders.read', 'job_cards.read'],
+    permissions: ['accounting.read', 'job_cards.read'],
   });
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => response({ data: [], pagination: { totalPages: 1 } })),
   );
-  show(SalesOrderManager);
-  expect(screen.getByRole('button', { name: 'Draft Order' }).disabled).toBe(true);
+  show(CounterSale);
+  expect(screen.getByRole('button', { name: 'New counter sale' }).disabled).toBe(true);
   show(JobCardManager);
   expect(screen.getByRole('button', { name: 'Create Job Card' }).disabled).toBe(true);
 });
@@ -87,61 +87,6 @@ it('finds an owner outside the first page of customers', async () => {
   expect(await screen.findByRole('option', { name: /Older Owner/ })).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Owner *'), { target: { value: '21' } });
   expect(screen.getByLabelText('Owner *').value).toBe('21');
-});
-
-it('creates a sales order with a warehouse and then confirms it', async () => {
-  let order;
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url, options) => {
-      const query = new URL(url, 'http://localhost');
-      if (query.pathname === '/api/v1/sales-orders' && options.method === 'POST') {
-        const payload = JSON.parse(options.body);
-        order = {
-          id: 1,
-          order_number: 'SO-1',
-          customer_name: 'Customer One',
-          grand_total: 123.45,
-          status: 'DRAFT',
-          ...payload,
-        };
-        return response({ data: order });
-      }
-      if (query.pathname.endsWith('/confirm')) {
-        if (!order.items[0].warehouseId)
-          return response({ error: { message: 'Warehouse selection is required.' } }, 400);
-        order.status = 'CONFIRMED';
-        return response({ data: order });
-      }
-      if (query.pathname === '/api/v1/sales-orders')
-        return response({ data: order ? [order] : [], pagination: { totalPages: 1 } });
-      if (query.pathname === '/api/v1/customers')
-        return response({ data: [{ id: 1, name: 'Customer One' }], pagination: { totalPages: 1 } });
-      if (query.pathname === '/api/v1/warehouses')
-        return response({
-          data: [{ id: 2, name: 'Main Warehouse' }],
-          pagination: { totalPages: 1 },
-        });
-      return response({
-        data: [{ id: 3, sku: 'PART-3', item_name: 'Filter', selling_price: 123.45 }],
-        pagination: { totalPages: 1 },
-      });
-    }),
-  );
-  show(SalesOrderManager);
-  fireEvent.click(screen.getByText('Draft Order'));
-  await screen.findByRole('option', { name: 'Customer One' });
-  fireEvent.change(screen.getByLabelText('Select Customer *'), { target: { value: '1' } });
-  await screen.findByRole('option', { name: /PART-3/ });
-  fireEvent.change(screen.getByLabelText('Select Stock Item *'), { target: { value: '3' } });
-  await screen.findByRole('option', { name: 'Main Warehouse' });
-  fireEvent.change(screen.getByLabelText('Warehouse *'), { target: { value: '2' } });
-  fireEvent.change(screen.getByLabelText('Unit Price (₹) *'), { target: { value: '123.45' } });
-  fireEvent.click(screen.getByText('Create Order'));
-  fireEvent.click(await screen.findByText('SO-1'));
-  fireEvent.click(screen.getByText('Confirm & Reserve Stock'));
-  await waitFor(() => expect(order.status).toBe('CONFIRMED'));
-  expect(order.items[0].warehouseId).toBe(2);
 });
 
 it('pages purchasing records and distinguishes an API failure from an empty result', async () => {
@@ -284,5 +229,59 @@ it('records a cash payment chosen while billing a job card', async () => {
       '/api/v1/accounting/receipts',
       expect.objectContaining({ customerId: 9, amount: 590, paymentMode: 'CASH' }),
     ),
+  );
+});
+
+it('makes a cash counter sale and pays that bill', async () => {
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url.startsWith('/api/v1/inventory/items/3/batches'))
+      return { data: [{ id: 8, warehouse_id: 2, quantity: 5 }] };
+    if (url.startsWith('/api/v1/inventory/items/3'))
+      return {
+        data: { id: 3, item_name: 'Oil', selling_price: 400, gst_rate: 18, current_quantity: 5 },
+      };
+    if (url.startsWith('/api/v1/inventory/items'))
+      return {
+        data: [{ id: 3, item_name: 'Oil', sku: 'OIL', current_quantity: 5 }],
+        pagination: { totalPages: 1 },
+      };
+    if (url.includes('/money-accounts')) return { data: [{ id: 1, kind: 'CASH', name: 'Cash' }] };
+    return { data: [], pagination: { totalPages: 1 } };
+  });
+  const post = vi.spyOn(api, 'post').mockImplementation(async (url) =>
+    url.endsWith('/direct-invoices')
+      ? {
+          data: {
+            invoiceId: 11,
+            invoiceNumber: 'CS/26-27/0001',
+            invoiceDate: '2026-11-27',
+            customerId: 5,
+            grandTotal: 472,
+          },
+        }
+      : { data: {} },
+  );
+  show(CounterSale);
+  fireEvent.click(screen.getByRole('button', { name: 'New counter sale' }));
+  await screen.findByRole('option', { name: /Oil \(OIL\)/ });
+  fireEvent.change(screen.getByLabelText('Item 1'), { target: { value: '3' } });
+  await waitFor(() => expect(screen.getByLabelText('Price (₹)').value).toBe('400'));
+  fireEvent.click(screen.getByRole('button', { name: 'Make bill' }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      '/api/v1/accounting/receipts',
+      expect.objectContaining({
+        customerId: 5,
+        amount: 472,
+        paymentMode: 'CASH',
+        allocations: [{ documentType: 'direct_invoice', documentId: 11, allocatedAmount: 472 }],
+      }),
+    ),
+  );
+  expect(post).toHaveBeenCalledWith(
+    '/api/v1/accounting/direct-invoices',
+    expect.objectContaining({
+      items: [expect.objectContaining({ itemId: 3, warehouseId: 2, unitPrice: 400 })],
+    }),
   );
 });

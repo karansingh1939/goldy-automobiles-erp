@@ -106,7 +106,7 @@ export function createAccountingRouter(db) {
         params.push(status);
       }
 
-      sql += ' ORDER BY di.invoice_date DESC, di.id DESC';
+      sql += ' ORDER BY di.invoice_date DESC, di.id DESC LIMIT 200';
 
       const invoices = db.prepare(sql).all(...params);
       res.status(200).json({ status: 'success', data: invoices });
@@ -121,7 +121,7 @@ export function createAccountingRouter(db) {
       const companyId = 1;
       const result = directBillingService.createDirectInvoice({
         companyId,
-        customerId: req.body.customerId,
+        customerId: req.body.customerId || directBillingService.walkInCustomerId(),
         invoiceDate: req.body.invoiceDate,
         items: req.body.items,
         narration: req.body.narration,
@@ -152,7 +152,7 @@ export function createAccountingRouter(db) {
       const items = db
         .prepare(
           `
-        SELECT dii.*, ii.item_name, ii.sku
+        SELECT dii.*, ii.item_name, ii.sku, ii.hsn_code
         FROM direct_invoice_items dii
         LEFT JOIN inventory_items ii ON dii.item_id = ii.id
         WHERE dii.direct_invoice_id = ?
@@ -179,10 +179,16 @@ export function createAccountingRouter(db) {
     (req, res, next) => {
       try {
         const companyId = 1;
-        directBillingService.cancelDirectInvoice(req.params.id, companyId, req.user.id);
-        res
-          .status(200)
-          .json({ status: 'success', message: 'Direct invoice cancelled successfully.' });
+        const result = directBillingService.cancelDirectInvoice(
+          req.params.id,
+          companyId,
+          req.user.id,
+        );
+        res.status(200).json({
+          status: 'success',
+          message: 'Direct invoice cancelled successfully.',
+          data: result,
+        });
       } catch (err) {
         next(err);
       }
@@ -220,6 +226,7 @@ export function createAccountingRouter(db) {
         narration: req.body.narration,
         createdBy: req.user.id,
         autoAllocate: req.body.autoAllocate,
+        allocations: req.body.allocations,
       });
 
       res.status(201).json({
@@ -322,6 +329,11 @@ export function createAccountingRouter(db) {
     '/money-entries',
     requirePermission('accounting.write'),
     handle(201, (req) => moneyService.recordOther(req.body, req.user.id)),
+  );
+  router.post(
+    '/customer-refunds',
+    requirePermission('accounting.write'),
+    handle(201, (req) => moneyService.refundCustomer(req.body, req.user.id)),
   );
   router.post(
     '/opening-balances',

@@ -34,7 +34,6 @@ export function createBackupRouter(db, backupScheduler) {
     requirePermission('backups.write'),
     controller.restoreUploadedDatabase,
   );
-  router.post('/purge-demo', requirePermission('backups.write'), controller.purgeDemoData);
 
   return router;
 }

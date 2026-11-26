@@ -18,9 +18,7 @@ import { createServiceHistoryRouter } from './modules/service-history/service-hi
 import { createBackupRouter } from './modules/backup/backup.routes.js';
 import { createTechnicianRouter } from './modules/technicians/technician.routes.js';
 import { createAuditRouter } from './modules/audit/audit.routes.js';
-import { createDemoRouter } from './modules/demo/demo.routes.js';
 import { createAccountingRouter } from './modules/accounting/accounting.routes.js';
-import { createSalesOrdersRouter } from './modules/sales-orders/sales-order.routes.js';
 import { createReturnsRouter } from './modules/returns/returns.routes.js';
 import { createWarrantyRouter } from './modules/warranties/warranty.routes.js';
 import { createCrmRouter } from './modules/crm/crm.routes.js';
@@ -156,9 +154,7 @@ export function createApp({ db: rawDb = getDatabase(), backupScheduler } = {}) {
   app.use('/api/v1', createServiceHistoryRouter(db));
   app.use('/api/v1', createJobCardRouter(db));
   app.use('/api/v1/purchases', createPurchasingRouter(db));
-  app.use('/api/v1/demo', createDemoRouter(db));
   app.use('/api/v1/accounting', createAccountingRouter(db));
-  app.use('/api/v1/sales-orders', createSalesOrdersRouter(db, authService));
   app.use('/api/v1/returns', createReturnsRouter(db));
   app.use('/api/v1/warranties', createWarrantyRouter(db));
   app.use('/api/v1/crm', createCrmRouter(db));

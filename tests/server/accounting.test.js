@@ -982,15 +982,6 @@ test('Accounting - Sprint 3 Direct Billing, Receipts, and Allocations Engine', a
     assert.equal(outstanding[0].outstandingAmount, 1062); // 900 * 1.18 = 1062
 
     // 6. Test Receipt Cancellation and Stock Restoration
-    // Cancel the first invoice (should return 400 because it has active receipt allocations)
-    const cancelFailRes = await context.request(
-      `/api/v1/accounting/direct-invoices/${invoice.invoiceId}/cancel`,
-      {
-        method: 'POST',
-        headers,
-      },
-    );
-    assert.equal(cancelFailRes.response.status, 400);
 
     // Cancel the receipt (which reverses allocations)
     const cancelReceiptRes = await context.request(

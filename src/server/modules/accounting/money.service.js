@@ -152,6 +152,72 @@ export class MoneyService {
   }
 
   /**
+   * Gives a customer back money they paid in advance (for example after a
+   * paid bill was cancelled). Never more than the advance they have.
+   */
+  refundCustomer({ customerId, accountId, amount, date, note } = {}, userId = null) {
+    const customer = this.db.prepare('SELECT id, name FROM customers WHERE id = ?').get(customerId);
+    if (!customer) fail('Choose the customer to refund.', 'CUSTOMER_NOT_FOUND', 404);
+    const value = roundMoney(amount);
+    if (!(value > 0)) fail('Enter an amount greater than zero.');
+    const account = this.accountById(accountId);
+    const ledgerId = this.postingEngine.getOrCreateCustomerLedger(this.companyId, customer.id);
+    // Customer ledgers are debit when they owe us; a credit balance is their advance.
+    const balance = this.db
+      .prepare(
+        `SELECT ROUND(COALESCE(SUM(CASE WHEN je.entry_type = 'DEBIT' THEN je.amount ELSE -je.amount END), 0), 2) AS net
+         FROM journal_entries je JOIN vouchers v ON v.id = je.voucher_id
+         WHERE je.ledger_id = ? AND v.status != 'CANCELLED'`,
+      )
+      .get(ledgerId).net;
+    const advance = roundMoney(Math.max(0, -balance));
+    if (value > advance)
+      fail(
+        advance > 0
+          ? `${customer.name} has only ₹${advance.toFixed(2)} paid in advance.`
+          : `${customer.name} has no advance to give back.`,
+        'REFUND_MORE_THAN_ADVANCE',
+      );
+    return this.db.transaction(() => {
+      const result = this.postingEngine.post({
+        companyId: this.companyId,
+        voucherType: 'Payment',
+        voucherDate: date || localDate(),
+        narration: `Refund to ${customer.name}${note ? `: ${String(note).trim().slice(0, 200)}` : ''}`,
+        created_by: userId,
+        entries: [
+          { ledgerId, type: 'DEBIT', amount: value },
+          { ledgerId: account.id, type: 'CREDIT', amount: value },
+        ],
+      });
+      // Use up the unmatched part of their receipts, newest first.
+      let left = value;
+      for (const receipt of this.db
+        .prepare(
+          "SELECT id, unallocated_amount FROM customer_receipts WHERE customer_id = ? AND status = 'ACTIVE' AND unallocated_amount > 0 ORDER BY id DESC",
+        )
+        .all(customer.id)) {
+        if (left <= 0) break;
+        const take = roundMoney(Math.min(left, receipt.unallocated_amount));
+        this.db
+          .prepare(
+            'UPDATE customer_receipts SET unallocated_amount = ROUND(unallocated_amount - ?, 2) WHERE id = ?',
+          )
+          .run(take, receipt.id);
+        left = roundMoney(left - take);
+      }
+      this.auditRepository.create({
+        userId,
+        action: 'REFUND',
+        entityType: 'customers',
+        entityId: customer.id,
+        newValue: { amount: value, accountId: account.id, voucherId: result.voucherId },
+      });
+      return { ...result, account: this.accountById(account.id) };
+    })();
+  }
+
+  /**
    * Starting balances when moving from Tally: cash, bank, what customers owe
    * and what is owed to suppliers. Posted as one balanced journal against the
    * owner's capital account.

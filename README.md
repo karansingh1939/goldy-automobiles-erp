@@ -6,7 +6,7 @@ An offline-first Windows desktop ERP for a single-laptop automobile repair works
 
 ![Workshop dashboard with disposable synthetic data](docs/images/dashboard.png)
 
-[View a confirmed sales order](docs/images/sales-orders.png). These are real Electron screenshots from the reproducible smoke workflow below. No customer records are shown; the dashboard correctly shows zero revenue before any synthetic invoice is posted.
+[View a counter sale bill](docs/images/counter-sale.png). These are real Electron screenshots from the reproducible smoke workflow below, using made-up data only.
 
 ## Why this exists
 

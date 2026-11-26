@@ -21,6 +21,7 @@ const CHOICES = {
   ],
   OUT: [
     ['supplier', 'I paid a supplier'],
+    ['refund', 'I gave money back to a customer'],
     ['expense-screen', 'Shop expense (rent, electricity...)'],
     ['owner', 'I took money out for myself'],
     ['loan', 'I repaid a loan'],
@@ -91,6 +92,14 @@ function MoneyForm({ direction, accounts, onDone }) {
           narration: form.note || 'Payment to supplier',
           autoAllocate: true,
         });
+      if (kind === 'refund')
+        return api.post('/api/v1/accounting/customer-refunds', {
+          customerId: Number(form.partyId),
+          accountId: Number(form.accountId),
+          amount,
+          date: form.date,
+          note: form.note,
+        });
       return api.post('/api/v1/accounting/money-entries', {
         direction,
         accountId: Number(form.accountId),
@@ -103,7 +112,13 @@ function MoneyForm({ direction, accounts, onDone }) {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['money-accounts'] });
       client.invalidateQueries({ queryKey: ['workshop-finance'] });
-      for (const key of ['supplier-ledger', 'supplier-current-balance', 'invoices', 'dashboard'])
+      for (const key of [
+        'supplier-ledger',
+        'supplier-current-balance',
+        'invoices',
+        'dashboard',
+        'receivable-ageing',
+      ])
         client.invalidateQueries({ queryKey: [key] });
       addNotification(
         direction === 'IN' ? 'Money received is saved.' : 'Money paid is saved.',
@@ -150,16 +165,16 @@ function MoneyForm({ direction, accounts, onDone }) {
       }}
     >
       <p className="font-semibold">{label}</p>
-      {(kind === 'customer' || kind === 'supplier') && (
+      {['customer', 'supplier', 'refund'].includes(kind) && (
         <div>
           <label htmlFor="money-party" className="block text-sm font-medium">
-            {kind === 'customer' ? 'Customer' : 'Supplier'}
+            {kind === 'supplier' ? 'Supplier' : 'Customer'}
           </label>
           <RemoteSelect
             id="money-party"
-            endpoint={kind === 'customer' ? '/api/v1/customers' : '/api/v1/suppliers'}
-            queryKey={kind === 'customer' ? 'customers' : 'suppliers'}
-            searchLabel={kind === 'customer' ? 'Find customer by name or phone' : 'Find supplier'}
+            endpoint={kind === 'supplier' ? '/api/v1/suppliers' : '/api/v1/customers'}
+            queryKey={kind === 'supplier' ? 'suppliers' : 'customers'}
+            searchLabel={kind === 'supplier' ? 'Find supplier' : 'Find customer by name or phone'}
             value={form.partyId}
             optionLabel={(row) => `${row.name}${row.phone ? ` · ${row.phone}` : ''}`}
             onChange={(value) => set('partyId', value)}

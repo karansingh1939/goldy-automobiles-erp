@@ -163,3 +163,75 @@ test('stock counts ignore catalogue items that were never bought', async () => {
     await c.close();
   }
 });
+
+test('a paid counter sale can be cancelled and the advance refunded', async () => {
+  const c = await createTestContext();
+  try {
+    const { item } = fixture(c.db);
+    const { DirectBillingService } =
+      await import('../../src/server/modules/accounting/direct-billing.service.js');
+    const { CustomerReceiptService } =
+      await import('../../src/server/modules/accounting/customer-receipt.service.js');
+    const { MoneyService } = await import('../../src/server/modules/accounting/money.service.js');
+    const billing = new DirectBillingService(c.db);
+    const walkIn = billing.walkInCustomerId();
+    assert.equal(billing.walkInCustomerId(), walkIn, 'walk-in customer is reused');
+    // An older unpaid bill must not swallow today's cash payment.
+    const older = billing.createDirectInvoice({
+      customerId: walkIn,
+      invoiceDate: localDate(),
+      items: [{ itemId: item, warehouseId: 1, quantity: 1, unitPrice: 100, gstRate: 0 }],
+    });
+    const bill = billing.createDirectInvoice({
+      customerId: walkIn,
+      invoiceDate: localDate(),
+      items: [{ itemId: item, warehouseId: 1, quantity: 1, unitPrice: 400, gstRate: 18 }],
+    });
+    new CustomerReceiptService(c.db).createReceipt({
+      customerId: walkIn,
+      receiptDate: localDate(),
+      amount: bill.grandTotal,
+      paymentMode: 'CASH',
+      allocations: [
+        {
+          documentType: 'direct_invoice',
+          documentId: bill.invoiceId,
+          allocatedAmount: bill.grandTotal,
+        },
+      ],
+    });
+    const status = (id) =>
+      c.db.prepare('SELECT status FROM direct_invoices WHERE id = ?').get(id).status;
+    assert.equal(status(bill.invoiceId), 'PAID');
+    assert.equal(status(older.invoiceId), 'UNPAID');
+
+    const cancelled = billing.cancelDirectInvoice(bill.invoiceId, 1, 1);
+    assert.equal(cancelled.advance_kept, bill.grandTotal);
+    assert.equal(status(bill.invoiceId), 'CANCELLED');
+
+    const money = new MoneyService(c.db);
+    const cash = money.listAccounts().find((a) => a.kind === 'CASH');
+    assert.throws(
+      () => money.refundCustomer({ customerId: walkIn, accountId: cash.id, amount: 100000 }),
+      /only/,
+    );
+    // They still owe ₹100 on the older bill, so only the rest is theirs to take back.
+    const advance = bill.grandTotal - 100;
+    money.refundCustomer({ customerId: walkIn, accountId: cash.id, amount: advance });
+    assert.equal(money.accountById(cash.id).balance, 100);
+    assert.equal(
+      c.db
+        .prepare(
+          'SELECT SUM(unallocated_amount) AS left FROM customer_receipts WHERE customer_id = ?',
+        )
+        .get(walkIn).left,
+      100,
+    );
+    assert.throws(
+      () => money.refundCustomer({ customerId: walkIn, accountId: cash.id, amount: 1 }),
+      /no advance/,
+    );
+  } finally {
+    await c.close();
+  }
+});

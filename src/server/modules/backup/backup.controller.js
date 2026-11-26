@@ -138,13 +138,4 @@ export class BackupController {
       next(error);
     }
   };
-  purgeDemoData = (req, res, next) => {
-    next(
-      new AppError(
-        'Heuristic data deletion is disabled. Use Reset Demo Database while in demo mode.',
-        400,
-        'DEMO_PURGE_DISABLED',
-      ),
-    );
-  };
 }

@@ -55,6 +55,7 @@ export default function Layout() {
     { name: 'Home', path: '/', icon: LayoutDashboard },
     { name: 'Job Cards', path: '/job-cards', icon: Wrench },
     { name: 'Bills', path: '/invoices', icon: Receipt },
+    { name: 'Counter Sale', path: '/counter-sale', icon: ShoppingCart },
     { name: 'Customers', path: '/customers', icon: Users },
     { name: 'Vehicles', path: '/vehicles', icon: Car },
     { name: 'Stock', path: '/inventory', icon: Package },
@@ -74,7 +75,6 @@ export default function Layout() {
     { name: 'Mechanics', path: '/technicians' },
     { name: 'Accounts (Ledger)', path: '/accounting' },
     { name: 'Supplier Ledger', path: '/supplier-ledger' },
-    { name: 'Sales Orders', path: '/sales-orders' },
     { name: 'Returns', path: '/returns' },
     { name: 'Warranties', path: '/warranties' },
     { name: 'Stock Count', path: '/stock-verification' },
@@ -131,7 +131,7 @@ export default function Layout() {
       }
       if (e.key === 'F3') {
         e.preventDefault();
-        navigate('/sales-orders');
+        navigate('/counter-sale');
       }
       if (e.key === 'F4') {
         e.preventDefault();

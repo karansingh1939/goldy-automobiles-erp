@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { env } from '../config/env.js';
 import { DbSafetyService } from './db-safety-service.js';
 import { IntegrityCheckService, HealthState } from './integrity-check-service.js';
@@ -150,6 +149,8 @@ export function createDatabase(filePath = env.dbFile, { allowRestoreLock = false
 const dbDir = path.dirname(env.dbFile);
 const dbExt = path.extname(env.dbFile);
 const dbBase = path.basename(env.dbFile, dbExt);
+// Very old versions had a demo-mode switch that moved the app onto this file.
+// If that setting is still on, keep opening it so no entered data is hidden.
 export const demoDbFile = path.join(dbDir, `${dbBase}_demo${dbExt}`);
 const configFilePath = path.join(dbDir, 'setup', 'app_config.json');
 
@@ -175,61 +176,6 @@ function readAppConfig() {
     );
   }
   return { demoMode: false };
-}
-
-function writeAppConfig(config) {
-  const temporary = `${configFilePath}.${randomUUID()}.tmp`;
-  try {
-    const configDir = path.dirname(configFilePath);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
-    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { encoding: 'utf8', flag: 'wx' });
-    fs.renameSync(temporary, configFilePath);
-  } catch (err) {
-    throw new AppError(
-      `Failed to save application mode: ${err.message}`,
-      500,
-      'CONFIG_WRITE_FAILED',
-    );
-  } finally {
-    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
-  }
-}
-
-export function isDemoMode() {
-  return readAppConfig().demoMode === true;
-}
-
-export function toggleDemoMode(enable) {
-  if (typeof enable !== 'boolean')
-    throw new AppError('Demo mode must be a boolean.', 400, 'VALIDATION_ERROR');
-  for (const file of [env.dbFile, demoDbFile]) {
-    if (
-      fs.existsSync(path.join(path.dirname(file), 'restore.lock')) ||
-      fs.existsSync(`${file}.backup.lock`)
-    ) {
-      throw new AppError('Database maintenance is in progress.', 409, 'MAINTENANCE_IN_PROGRESS');
-    }
-  }
-  const previousConfig = readAppConfig();
-  const config = { ...previousConfig, demoMode: enable };
-  const filePath = config.demoMode ? demoDbFile : env.dbFile;
-  if (activeDatabase?.inTransaction)
-    throw new AppError('A database transaction is in progress.', 409, 'MAINTENANCE_IN_PROGRESS');
-  const candidate = createDatabase(filePath);
-  let saved = false;
-  try {
-    writeAppConfig(config);
-    saved = true;
-    if (activeDatabase?.open) activeDatabase.close();
-    activeDatabase = candidate;
-    return config.demoMode;
-  } catch (error) {
-    candidate.close();
-    if (saved) writeAppConfig(previousConfig);
-    throw error;
-  }
 }
 
 export function getDatabase() {

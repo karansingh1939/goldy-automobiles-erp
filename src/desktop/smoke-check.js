@@ -131,72 +131,45 @@ export async function runDesktopSmoke(window, backend, failures) {
   });
   console.log('SMOKE PASS: synthetic customer and stock fixtures');
   await execute(() => {
-    location.hash = '/sales-orders';
+    location.hash = '/counter-sale';
   });
-  await until('sales order screen', hasText, 'Sales Orders & Bookings');
-  await execute(click, 'Draft Order');
-  await until('draft form', () =>
-    Boolean(document.querySelector('input[aria-label="Search stock items"]')),
+  await until('counter sale screen', hasText, 'Sell parts or oil over the counter');
+  await execute(click, 'New counter sale');
+  await until(
+    'counter customer selector',
+    (recordId) => {
+      const select = document.getElementById('counter-customer');
+      return select && [...select.options].some((option) => option.value === String(recordId));
+    },
+    customer.id,
   );
-  await execute(() => {
-    const input = document.querySelector('input[aria-label="Search stock items"]');
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(
-      input,
-      'SMOKE-PART',
-    );
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  for (const [id, value] of [
-    ['modal-order-customer', customer.id],
-    ['modal-order-item', item.id],
-    ['modal-order-warehouse', warehouse.id],
-  ]) {
-    await until(
-      'record selector',
-      (elementId, recordId) => {
-        const select = document.getElementById(elementId);
-        return (
-          select &&
-          !select.disabled &&
-          [...select.options].some((option) => option.value === String(recordId))
-        );
-      },
-      id,
-      value,
-    );
-    await execute(fill, id, value);
-  }
-  await execute(fill, 'modal-order-qty', '2');
-  await execute(click, 'Create Order');
-  await until('draft order', hasText, 'DRAFT');
-  await execute(() => {
-    const row = [...document.querySelectorAll('tbody tr')].find((item) =>
-      item.textContent.includes('Synthetic Smoke Customer'),
-    );
-    if (!row) throw new Error('Missing drafted order');
-    row.click();
-  });
-  await until('order confirmation action', () =>
-    [...document.querySelectorAll('button')].some(
-      (button) => button.textContent.trim() === 'Confirm & Reserve Stock' && !button.disabled,
-    ),
+  await execute(fill, 'counter-customer', customer.id);
+  await until(
+    'counter item selector',
+    (recordId) => {
+      const select = document.getElementById('counter-item-0');
+      return select && [...select.options].some((option) => option.value === String(recordId));
+    },
+    item.id,
   );
-  await execute(click, 'Confirm & Reserve Stock');
-  await until('confirmed order', hasText, 'CONFIRMED');
-  const order = db
-    .prepare('SELECT id, status FROM sales_orders WHERE customer_id = ?')
-    .get(customer.id);
-  if (order?.status !== 'CONFIRMED') throw new Error('Sales order did not persist');
-  const reserved = db
-    .prepare(
-      "SELECT COALESCE(SUM(quantity),0) AS quantity FROM inventory_reservations WHERE reference_id = ? AND reference_table = ? AND status = 'ACTIVE'",
-    )
-    .get(order.id, 'sales_orders');
-  if (reserved.quantity !== 2) throw new Error('Confirmed order did not reserve stock');
+  await execute(fill, 'counter-item-0', item.id);
+  await until('counter price filled', () =>
+    [...document.querySelectorAll('input[type="number"]')].some((input) => input.value === '150'),
+  );
+  await execute(click, 'Make bill');
+  await until('counter bill made', hasText, 'Print bill');
+  const sale = db
+    .prepare('SELECT invoice_number, status, grand_total FROM direct_invoices ORDER BY id DESC')
+    .get();
+  if (!/^CS\/\d{2}-\d{2}\/0001$/.test(sale?.invoice_number || ''))
+    throw new Error('Counter sale bill number is wrong');
+  if (sale.status !== 'PAID') throw new Error('Cash counter sale was not marked paid');
+  const left = db.prepare('SELECT current_quantity FROM inventory_items WHERE id = ?').get(item.id);
+  if (left.current_quantity !== 9) throw new Error('Counter sale did not take stock out');
   const inventoryMetrics = await request('/dashboard/inventory');
-  if (inventoryMetrics.totalValuation !== 1000)
+  if (inventoryMetrics.totalValuation !== 900)
     throw new Error('Synthetic inventory valuation mismatch');
-  console.log('SMOKE PASS: sales draft, confirmation and stock reservation');
+  console.log('SMOKE PASS: counter sale bill, cash payment and stock out');
 
   const screenshotDirectory = process.env.GOLDY_SMOKE_SCREENSHOTS;
   if (screenshotDirectory) {
@@ -209,7 +182,7 @@ export async function runDesktopSmoke(window, backend, failures) {
     // DOM readiness precedes Chromium's compositor frame in a hidden window.
     await new Promise((resolve) => setTimeout(resolve, 500));
     fs.writeFileSync(
-      path.join(screenshotDirectory, 'sales-orders.png'),
+      path.join(screenshotDirectory, 'counter-sale.png'),
       (await window.webContents.capturePage()).toPNG(),
     );
     await execute(() => {
@@ -225,7 +198,7 @@ export async function runDesktopSmoke(window, backend, failures) {
       const label = [...document.querySelectorAll('span')].find(
         (element) => element.textContent === 'Stock value',
       );
-      return label?.parentElement.textContent.includes('1,000');
+      return label?.parentElement.textContent.includes('900');
     });
     await window.webContents.capturePage();
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -233,7 +206,7 @@ export async function runDesktopSmoke(window, backend, failures) {
       path.join(screenshotDirectory, 'dashboard.png'),
       (await window.webContents.capturePage()).toPNG(),
     );
-    console.log('SMOKE PASS: synthetic dashboard and sales screenshots');
+    console.log('SMOKE PASS: synthetic dashboard and counter sale screenshots');
   }
   // Post through the actual React form, then check persisted totals and a previously cached dashboard.
   const supplier = (
@@ -301,7 +274,7 @@ export async function runDesktopSmoke(window, backend, failures) {
   const quantity = db
     .prepare('SELECT SUM(quantity) AS quantity FROM inventory_batches WHERE item_id = ?')
     .get(item.id).quantity;
-  if (quantity !== 12) throw new Error('Received stock quantity mismatch');
+  if (quantity !== 11) throw new Error('Received stock quantity mismatch');
   await execute(() => {
     location.hash = '/';
   });
@@ -309,10 +282,10 @@ export async function runDesktopSmoke(window, backend, failures) {
     const label = [...document.querySelectorAll('span')].find(
       (node) => node.textContent === 'Stock value',
     );
-    return label?.parentElement.textContent.includes('1,200');
+    return label?.parentElement.textContent.includes('1,100');
   });
   console.log(
-    'SMOKE PASS: receipt posted with stock twelve, subtotal two hundred and tax thirty six',
+    'SMOKE PASS: receipt posted with stock eleven, subtotal two hundred and tax thirty six',
   );
   console.log('SMOKE PASS: cached dashboard refreshed automatically after receipt');
   if (screenshotDirectory) {

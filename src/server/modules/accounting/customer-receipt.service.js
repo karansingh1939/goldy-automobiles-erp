@@ -30,6 +30,7 @@ export class CustomerReceiptService {
       narration = '',
       createdBy = null,
       autoAllocate = false,
+      allocations = null, // [{ documentType, documentId, allocatedAmount }] to pay named bills
     } = payload;
 
     // 1. Validations
@@ -147,8 +148,10 @@ export class CustomerReceiptService {
 
       const receiptId = info.lastInsertRowid;
 
-      // 5. Trigger FIFO matching if requested
-      if (autoAllocate) {
+      // 5. Pay the named bills, or match oldest bills first if requested
+      if (Array.isArray(allocations) && allocations.length) {
+        this.allocationService.allocateManualTransaction('CUSTOMER', receiptId, allocations);
+      } else if (autoAllocate) {
         this.allocationService.allocateReceiptFIFO(receiptId, companyId, customerId, receiptAmount);
       }
 

@@ -238,7 +238,14 @@ export default function JobCardManager() {
             ? { paymentMode: 'CASH' }
             : { paymentMode: 'BANK', bankLedgerId: bankId }),
           narration: `${payMode} payment for ${invoice.invoice_number}`,
-          autoAllocate: true,
+          // Pay this bill, not the customer's oldest unpaid one.
+          allocations: [
+            {
+              documentType: 'job_card_invoice',
+              documentId: invoice.id,
+              allocatedAmount: Number(invoice.grand_total),
+            },
+          ],
         });
         queryClient.invalidateQueries({ queryKey: ['money-accounts'] });
         addNotification(

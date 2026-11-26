@@ -3,6 +3,7 @@ import { AccountingPostingEngine } from './posting-engine.service.js';
 import { createInventoryService } from '../inventory/inventory.service.js';
 import { assertCustomerCreditLimit } from './customer-credit.service.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
+import { releaseDocumentAllocations } from './allocation.service.js';
 
 function roundMoney(val) {
   return Math.round(val * 100) / 100;
@@ -96,6 +97,21 @@ export class DirectBillingService {
   /**
    * Creates a direct counter invoice.
    */
+  /** The shared customer record used for walk-in counter sales without a name. */
+  walkInCustomerId() {
+    const existing = this.db
+      .prepare("SELECT id FROM customers WHERE name = 'Walk-in customer' ORDER BY id LIMIT 1")
+      .get();
+    if (existing) return existing.id;
+    return Number(
+      this.db
+        .prepare(
+          "INSERT INTO customers (name, notes) VALUES ('Walk-in customer', 'Counter sales without a name')",
+        )
+        .run().lastInsertRowid,
+    );
+  }
+
   createDirectInvoice(payload) {
     const {
       companyId = 1,
@@ -405,6 +421,8 @@ export class DirectBillingService {
       return {
         invoiceId,
         invoiceNumber,
+        invoiceDate,
+        customerId,
         grandTotal,
         voucherId: salesVoucher.voucherId,
         cogsVoucherId,
@@ -436,19 +454,10 @@ export class DirectBillingService {
         throw new AppError('Invoice is already cancelled.', 400, 'INVOICE_ALREADY_CANCELLED');
       }
 
-      // Assert that no payments are currently allocated to this invoice
-      const allocations = this.db
-        .prepare(
-          "SELECT COUNT(*) as count FROM receipt_allocations WHERE document_type = 'direct_invoice' AND document_id = ?",
-        )
-        .get(invoiceId);
-      if (allocations && allocations.count > 0) {
-        throw new AppError(
-          'Cannot cancel invoice with active payment allocations. Revert allocations first.',
-          400,
-          'ACTIVE_ALLOCATIONS_EXIST',
-        );
-      }
+      // Money already paid on this bill stays with the customer as an advance.
+      const advanceKept = releaseDocumentAllocations(this.db, 'direct_invoice', invoice.id);
+      if (advanceKept > 0)
+        this.db.prepare('UPDATE direct_invoices SET amount_paid = 0 WHERE id = ?').run(invoice.id);
 
       // Reverse actual batch movements, including invoices spanning several batches.
       const movements = this.db
@@ -495,7 +504,7 @@ export class DirectBillingService {
         )
         .run(invoiceId);
 
-      return true;
+      return { cancelled: true, advance_kept: advanceKept };
     })();
   }
 }

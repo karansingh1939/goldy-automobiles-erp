@@ -13,7 +13,7 @@ import VehicleManager from './modules/vehicles/VehicleManager.jsx';
 import SupplierManager from './modules/suppliers/SupplierManager.jsx';
 import InventoryManager from './modules/inventory/InventoryManager.jsx';
 import PurchasingManager from './modules/purchasing/PurchasingManager.jsx';
-import SalesOrderManager from './modules/sales/SalesOrderManager.jsx';
+import CounterSale from './modules/sales/CounterSale.jsx';
 import JobCardManager from './modules/job-cards/JobCardManager.jsx';
 import WarrantyManager from './modules/warranties/WarrantyManager.jsx';
 import ReturnsManager from './modules/returns/ReturnsManager.jsx';
@@ -55,7 +55,7 @@ export default function App() {
               <Route path="/job-cards" element={<JobCardManager />} />
               <Route path="/workshop" element={<WorkshopBoard />} />
               <Route path="/reminders" element={<ServiceReminders />} />
-              <Route path="/sales-orders" element={<SalesOrderManager />} />
+              <Route path="/counter-sale" element={<CounterSale />} />
               <Route path="/inventory" element={<InventoryManager />} />
               <Route path="/purchasing" element={<PurchasingManager />} />
               <Route path="/accounting" element={<AccountingPortal />} />
