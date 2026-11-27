@@ -301,3 +301,37 @@ test('wrong money entries can be cancelled from Money In / Out', async () => {
     await c.close();
   }
 });
+
+test('warranty claims can be rejected and expired warranties are marked', async () => {
+  const c = await createTestContext();
+  try {
+    const { item } = fixture(c.db);
+    const { WarrantyService } =
+      await import('../../src/server/modules/warranties/warranty.service.js');
+    const customer = c.db
+      .prepare("INSERT INTO customers (name) VALUES ('Claim Customer')")
+      .run().lastInsertRowid;
+    const warranties = new WarrantyService(c.db);
+    const reg = warranties.registerWarranty({
+      companyId: 1,
+      customerId: customer,
+      itemId: item,
+      startDate: '2026-01-01',
+      warrantyPeriodMonths: 6,
+    });
+    const claim = warranties.fileClaim({ registrationId: reg.id, claimDate: '2026-03-01' }, 1);
+    const rejected = warranties.rejectClaim(claim.id, { notes: 'Not covered' }, 1);
+    assert.equal(rejected.status, 'REJECTED');
+
+    assert.throws(
+      () => warranties.fileClaim({ registrationId: reg.id, claimDate: '2026-12-01' }, 1),
+      /expired/,
+    );
+    assert.equal(
+      c.db.prepare('SELECT status FROM warranty_registrations WHERE id = ?').get(reg.id).status,
+      'EXPIRED',
+    );
+  } finally {
+    await c.close();
+  }
+});

@@ -24,7 +24,7 @@ function parseListQuery(query) {
 function normalizeDatabaseError(error) {
   if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
     return new AppError(
-      'A technician with this code already exists.',
+      'A mechanic with this code already exists.',
       409,
       'DUPLICATE_TECHNICIAN_CODE',
     );
@@ -58,15 +58,15 @@ export class TechnicianService {
    * @returns {object} Created technician
    */
   create(payload, userId) {
-    required(payload.full_name, 'Full Name');
-    required(payload.phone_number, 'Phone Number');
+    required(payload.full_name, 'Mechanic name');
+    required(payload.phone_number, 'Phone number');
 
     // Business code format validation: only if explicitly provided
     if (payload.technician_code) {
       const codePattern = /^[a-zA-Z0-9_-]+$/;
       if (!codePattern.test(payload.technician_code)) {
         throw new AppError(
-          'Technician Code contains invalid characters. Only alphanumeric, dashes, and underscores are allowed.',
+          'Mechanic code can only use letters, numbers, dashes and underscores.',
           400,
           'INVALID_CODE_FORMAT',
         );
@@ -76,7 +76,7 @@ export class TechnicianService {
       const existing = this.repository.findByCode(payload.technician_code);
       if (existing) {
         throw new AppError(
-          `Technician Code "${payload.technician_code}" is already in use.`,
+          `Mechanic code "${payload.technician_code}" is already in use.`,
           409,
           'DUPLICATE_TECHNICIAN_CODE',
         );
@@ -116,7 +116,7 @@ export class TechnicianService {
   get(id) {
     const technician = this.repository.findById(id);
     if (!technician) {
-      throw new AppError('Technician was not found.', 404, 'TECHNICIAN_NOT_FOUND');
+      throw new AppError('Mechanic was not found.', 404, 'TECHNICIAN_NOT_FOUND');
     }
     return technician;
   }
@@ -169,11 +169,11 @@ export class TechnicianService {
 
     const updateData = {};
     if (payload.full_name !== undefined) {
-      required(payload.full_name, 'Full Name');
+      required(payload.full_name, 'Mechanic name');
       updateData.full_name = payload.full_name.trim();
     }
     if (payload.phone_number !== undefined) {
-      required(payload.phone_number, 'Phone Number');
+      required(payload.phone_number, 'Phone number');
       updateData.phone_number = payload.phone_number.trim();
     }
     if (payload.specialization !== undefined) {
@@ -242,7 +242,11 @@ export class TechnicianService {
     // 1. Verify technician exists and is active
     const technician = this.get(technicianId);
     if (technician.is_active === 0) {
-      throw new AppError('Cannot assign to an inactive technician.', 400, 'INACTIVE_TECHNICIAN');
+      throw new AppError(
+        'This mechanic is switched off. Switch them on first.',
+        400,
+        'INACTIVE_TECHNICIAN',
+      );
     }
 
     // 2. Verify job card exists
@@ -253,11 +257,7 @@ export class TechnicianService {
 
     // 3. Verify job card is editable (not in completed or cancelled states)
     if (['COMPLETED', 'CANCELLED'].includes(jobCard.status)) {
-      throw new AppError(
-        'Cannot assign technician to a finalized or cancelled job card.',
-        400,
-        'JOB_CARD_LOCKED',
-      );
+      throw new AppError('This job card is already billed or cancelled.', 400, 'JOB_CARD_LOCKED');
     }
 
     this.repository.assignToJobCard(jobCardId, technicianId, userId, notes);

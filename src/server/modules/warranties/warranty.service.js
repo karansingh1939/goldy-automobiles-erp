@@ -65,6 +65,14 @@ export class WarrantyService {
 
     const date = claimDate || localDate();
 
+    // Mark an expired warranty before refusing, outside the transaction, so
+    // the "expired" status is kept even though the claim is refused.
+    const existing = this.repository.findWarrantyRegistrationById(registrationId);
+    if (existing?.status === 'ACTIVE' && new Date(date) > new Date(existing.end_date)) {
+      this.repository.updateWarrantyRegistration(existing.id, { status: 'EXPIRED' });
+      throw new AppError('Warranty registration has expired.', 400, 'WARRANTY_EXPIRED');
+    }
+
     return this.repository.transaction(() => {
       const reg = this.repository.findWarrantyRegistrationById(registrationId);
       if (!reg) {
@@ -77,14 +85,6 @@ export class WarrantyService {
           400,
           'VALIDATION_ERROR',
         );
-      }
-
-      // Verify not expired
-      const expiry = new Date(reg.end_date);
-      const claim = new Date(date);
-      if (claim > expiry) {
-        this.repository.updateWarrantyRegistration(reg.id, { status: 'EXPIRED' });
-        throw new AppError('Warranty registration has expired.', 400, 'WARRANTY_EXPIRED');
       }
 
       return this.repository.createWarrantyClaim({

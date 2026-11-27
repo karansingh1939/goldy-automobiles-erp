@@ -316,7 +316,8 @@ export class InventoryService {
         itemId: payload.item_id,
         warehouseId: payload.warehouse_id,
         supplierId: payload.supplier_id || null,
-        batchNumber: payload.batch_number,
+        // Batch is optional for the owner; opening stock without one is "OPENING".
+        batchNumber: String(payload.batch_number || '').trim() || 'OPENING',
         manufactureDate: payload.manufacture_date || null,
         expiryDate: payload.expiry_date || null,
         quantity: qty,
@@ -654,7 +655,7 @@ export class InventoryService {
 
       // One workshop, one person: a move between godowns arrives at once.
       // (There is no separate "receive" step on any screen.)
-      const received = this.receiveTransfer(transferId, { receivedQuantity: qty }, userId);
+      const received = this.receiveTransfer(transferId, userId);
       return {
         ...received,
         transferId,
@@ -666,136 +667,35 @@ export class InventoryService {
     });
   }
 
-  receiveTransfer(transferId, payload, userId) {
-    return this.repository.transaction(() => {
-      const transfer = this.db
-        .prepare('SELECT * FROM stock_transfers WHERE id = ?')
-        .get(transferId);
-      if (!transfer) {
-        throw new AppError('Stock transfer record not found.', 404, 'TRANSFER_NOT_FOUND');
-      }
-      if (transfer.status !== 'PENDING') {
-        throw new AppError(
-          `Cannot receive transfer in status ${transfer.status}.`,
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      this.assertWarehousePermission(userId, transfer.to_warehouse_id);
-
-      const receivedQty =
-        payload.receivedQuantity !== undefined
-          ? number(payload.receivedQuantity)
-          : transfer.quantity;
-      if (receivedQty < 0 || receivedQty > transfer.quantity) {
-        throw new AppError(
-          'Received quantity must be non-negative and less than or equal to shipped quantity.',
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      const sourceBatch = this.repository.findBatchById(transfer.batch_id);
-      if (!sourceBatch) {
-        throw new AppError('Original batch not found.', 404, 'BATCH_NOT_FOUND');
-      }
-
-      let into = null;
-      if (receivedQty > 0) {
-        into = this.stockIn({
-          itemId: transfer.item_id,
-          warehouseId: transfer.to_warehouse_id,
-          supplierId: sourceBatch.supplier_id,
-          batchNumber: sourceBatch.batch_number,
-          manufactureDate: sourceBatch.manufacture_date,
-          expiryDate: sourceBatch.expiry_date,
-          quantity: receivedQty,
-          unitCost: transfer.unit_cost,
-          transactionType: 'Transfer',
-          referenceType: 'stock_transfers',
-          referenceId: transferId,
-          notes: transfer.notes || null,
-          userId,
-          keepAverageCost: true,
-        });
-      }
-
-      // Handle variance/loss: if receivedQty < shipped qty, adjust out the loss as DAMAGED/LOST
-      const variance = transfer.quantity - receivedQty;
-      let varianceAdjustmentId = null;
-      if (variance > 0) {
-        varianceAdjustmentId = this.repository.createStockAdjustment({
-          adjustment_number: code('ADJ'),
-          item_id: transfer.item_id,
-          batch_id: transfer.batch_id,
-          warehouse_id: transfer.from_warehouse_id,
-          adjustment_type: 'OUT',
-          quantity: variance,
-          unit_cost: transfer.unit_cost,
-          reason: `Transfer Variance Loss (Transfer ${transfer.transfer_number})`,
-          created_by: userId,
-        });
-
-        // Add category as LOST/DAMAGED
-        this.db
-          .prepare("UPDATE stock_adjustments SET category = 'LOST' WHERE id = ?")
-          .run(varianceAdjustmentId);
-
-        // We post the double entry Journal voucher for this loss value!
-        this.getItem(transfer.item_id);
-        const companyId = 1;
-        const lossVal = roundMoney(variance * transfer.unit_cost);
-
-        const ledgerEntries = [
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'stock_adjustments'),
-            type: 'DEBIT',
-            amount: lossVal,
-            narration: `Loss write-off: Transfer Variance ${transfer.transfer_number}`,
-          },
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'inventory_stock'),
-            type: 'CREDIT',
-            amount: lossVal,
-            narration: `Loss write-off: Transfer Variance ${transfer.transfer_number}`,
-          },
-        ];
-
-        const voucher = this.postingEngine.post({
-          companyId,
-          voucherType: 'Journal',
-          voucherDate: localDate(),
-          narration: `Transfer Variance Write-Off: Transfer ${transfer.transfer_number}`,
-          referenceTable: 'stock_adjustments',
-          referenceId: varianceAdjustmentId,
-          entries: ledgerEntries,
-        });
-
-        this.db
-          .prepare('UPDATE stock_adjustments SET voucher_id = ? WHERE id = ?')
-          .run(voucher.voucherId, varianceAdjustmentId);
-      }
-
-      this.db
-        .prepare(
-          `
-        UPDATE stock_transfers 
-        SET status = 'COMPLETED', received_quantity = ?, received_at = CURRENT_TIMESTAMP 
-        WHERE id = ?
-      `,
-        )
-        .run(receivedQty, transferId);
-
-      return {
-        transferId,
-        status: 'COMPLETED',
-        receivedQuantity: receivedQty,
-        variance,
-        in: into,
-        varianceAdjustmentId,
-      };
+  /** Puts moved stock into the destination godown and marks the move complete. */
+  receiveTransfer(transferId, userId) {
+    const transfer = this.db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(transferId);
+    this.assertWarehousePermission(userId, transfer.to_warehouse_id);
+    const sourceBatch = this.repository.findBatchById(transfer.batch_id);
+    const into = this.stockIn({
+      itemId: transfer.item_id,
+      warehouseId: transfer.to_warehouse_id,
+      supplierId: sourceBatch.supplier_id,
+      batchNumber: sourceBatch.batch_number,
+      manufactureDate: sourceBatch.manufacture_date,
+      expiryDate: sourceBatch.expiry_date,
+      quantity: transfer.quantity,
+      unitCost: transfer.unit_cost,
+      transactionType: 'Transfer',
+      referenceType: 'stock_transfers',
+      referenceId: transferId,
+      notes: transfer.notes || null,
+      userId,
+      keepAverageCost: true,
     });
+    this.db
+      .prepare(
+        `UPDATE stock_transfers
+         SET status = 'COMPLETED', received_quantity = quantity, received_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .run(transferId);
+    return { transferId, status: 'COMPLETED', receivedQuantity: transfer.quantity, in: into };
   }
 
   /** Stock on hand for an item, optionally in one godown or one batch. */
@@ -1666,77 +1566,55 @@ export class InventoryService {
       throw new AppError('At least one item is required.', 400, 'VALIDATION_ERROR');
     }
 
+    // Counts go into the main godown, through the same opening-stock and
+    // adjustment steps as single entries, so the accounts move with the stock.
+    const godown = this.db
+      .prepare(
+        "SELECT id FROM warehouses WHERE is_active = 1 ORDER BY is_default DESC, code = 'MAIN' DESC, id LIMIT 1",
+      )
+      .get()?.id;
+    if (!godown) throw new AppError('Add a godown first.', 400, 'WAREHOUSE_REQUIRED');
+
     return this.repository.transaction(() => {
       for (const entry of items) {
         const itemId = Number(entry.itemId ?? entry.item_id);
         const quantity = number(entry.quantity);
         const unitCost = entry.unitCost ?? entry.unit_cost;
-
         if (!itemId) {
           throw new AppError('Item ID is required for all entries.', 400, 'VALIDATION_ERROR');
         }
         if (quantity < 0) {
           throw new AppError('Quantity cannot be negative.', 400, 'VALIDATION_ERROR');
         }
-
         const item = this.repository.findItemById(itemId);
         if (!item) {
           throw new AppError(`Item ID ${itemId} not found.`, 404, 'ITEM_NOT_FOUND');
         }
-
-        const currentQty = number(item.current_quantity);
-        const diff = quantity - currentQty;
-
-        if (diff === 0) continue;
-
+        const diff = roundMoney(quantity - number(item.current_quantity));
         if (diff > 0) {
-          const batchNumber = `BAT-${item.sku}-OPEN`;
-          this.stockIn({
-            itemId,
-            warehouseId: 1,
-            supplierId: item.supplier_id || 1,
-            batchNumber,
-            quantity: diff,
-            unitCost:
-              unitCost !== undefined
-                ? money(unitCost)
-                : item.average_cost || item.purchase_cost || 0,
-            transactionType: 'Opening Stock',
-            referenceType: 'bulk_initial',
-            referenceId: 1,
+          this.createOpeningStock(
+            {
+              item_id: itemId,
+              warehouse_id: godown,
+              quantity: diff,
+              unit_cost:
+                unitCost !== undefined ? unitCost : item.average_cost || item.purchase_cost || 0,
+              batch_number: `${item.sku}-OPEN`,
+            },
             userId,
-          });
-        } else {
-          let remainingToDeduct = Math.abs(diff);
-          const batches = this.db
-            .prepare(
-              'SELECT id, quantity FROM inventory_batches WHERE item_id = ? AND warehouse_id = 1 AND quantity > 0 ORDER BY id ASC',
-            )
-            .all(itemId);
-          for (const batch of batches) {
-            if (remainingToDeduct <= 0) break;
-            const deductQty = Math.min(batch.quantity, remainingToDeduct);
-            if (deductQty > 0) {
-              this.stockOut({
-                itemId,
-                warehouseId: 1,
-                batchId: batch.id,
-                quantity: deductQty,
-                transactionType: 'Adjustment',
-                referenceType: 'bulk_initial',
-                referenceId: 1,
-                userId,
-              });
-              remainingToDeduct -= deductQty;
-            }
-          }
-          if (remainingToDeduct > 0) {
-            throw new AppError(
-              `Cannot reduce stock for ${item.item_name} by ${Math.abs(diff)} as there is insufficient stock in batches.`,
-              400,
-              'INSUFFICIENT_STOCK',
-            );
-          }
+          );
+        } else if (diff < 0) {
+          this.createAdjustment(
+            {
+              item_id: itemId,
+              warehouse_id: godown,
+              adjustment_type: 'OUT',
+              quantity: Math.abs(diff),
+              category: 'OPENING_CORRECTION',
+              reason: 'Stock count correction',
+            },
+            userId,
+          );
         }
       }
       return { success: true };
