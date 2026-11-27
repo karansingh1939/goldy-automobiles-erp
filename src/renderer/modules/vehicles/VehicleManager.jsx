@@ -1,169 +1,114 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Search, Plus, Car } from 'lucide-react';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
-import { validateRequired, validateVehicleReg } from '../../shared/utils/validation.js';
+import { validateVehicleReg } from '../../shared/utils/validation.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import RemoteSelect from '../../shared/components/RemoteSelect.jsx';
 import DataTable from '../../shared/components/DataTable.jsx';
-import { Search, Plus, Car, X, Edit2, Trash2 } from 'lucide-react';
+import ServerPagination from '../../shared/components/ServerPagination.jsx';
+import { TextField, Modal, FormButtons, RowActions } from '../../shared/components/FormParts.jsx';
 
+const PAGE_SIZE = 15;
+const blank = () => ({
+  customer_id: '',
+  registration_number: '',
+  make: '',
+  model: '',
+  variant: '',
+  fuel_type: 'Petrol',
+  year: '',
+  vin: '',
+  engine_number: '',
+  chassis_number: '',
+  odometer_reading: '',
+});
+
+/** Every car with its owner; add, edit or delete one. */
 export default function VehicleManager() {
   const queryClient = useQueryClient();
   const addNotification = useAppStore((state) => state.addNotification);
   const openDialog = useAppStore((state) => state.openDialog);
-  const { hasPermission } = usePermissions();
+  const canWrite = usePermissions().hasPermission('vehicles.write');
 
-  const canWrite = hasPermission('vehicles.write');
-
-  // Search & Navigation States
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [limit] = useState(15);
-  const sortBy = 'registration_number';
-  const sortOrder = 'asc';
+  const [editing, setEditing] = useState(null); // null: closed, {}: new, row: edit
+  const [form, setForm] = useState(blank);
+  const set =
+    (key, upper = false) =>
+    (event) =>
+      setForm({ ...form, [key]: upper ? event.target.value.toUpperCase() : event.target.value });
 
-  // Modals state
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [editingVehicle, setEditingVehicle] = useState(null);
-
-  // Form Fields State
-  const [customerId, setCustomerId] = useState('');
-  const [regNumber, setRegNumber] = useState('');
-  const [make, setMake] = useState('');
-  const [model, setModel] = useState('');
-  const [variant, setVariant] = useState('');
-  const [fuelType, setFuelType] = useState('Petrol');
-  const [year, setYear] = useState('');
-  const [vin, setVin] = useState('');
-  const [engineNumber, setEngineNumber] = useState('');
-  const [chassisNumber, setChassisNumber] = useState('');
-  const [odometer, setOdometer] = useState('');
-
-  // Fetch Vehicles Query
-  const {
-    data: response,
-    isLoading,
-    error,
-  } = useQuery({
-    queryKey: ['vehicles', search, page, sortBy, sortOrder],
+  const list = useQuery({
+    queryKey: ['vehicles', search, page],
     queryFn: () =>
       api.get(
-        `/api/v1/vehicles?search=${encodeURIComponent(search)}&page=${page}&pageSize=${limit}&sortBy=${sortBy}&sortOrder=${sortOrder}`,
+        `/api/v1/vehicles?${new URLSearchParams({ search, page, pageSize: PAGE_SIZE, sortBy: 'registration_number', sortOrder: 'asc' })}`,
       ),
   });
+  const totalPages = list.data?.pagination?.totalPages || 1;
 
-  const vehicles = response?.data || [];
-  const pagination = response?.pagination || { totalPages: 1, currentPage: 1 };
-
-  // Mutations
-  const createMutation = useMutation({
-    mutationFn: (payload) => api.post('/api/v1/vehicles', payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      addNotification('Vehicle registered successfully.', 'success');
-      setShowAddModal(false);
-      resetForm();
-    },
-    onError: (err) => addNotification(err.message || 'Failed to register vehicle.', 'error'),
+  const after = (message) => () => {
+    queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    addNotification(message, 'success');
+    setEditing(null);
+  };
+  const save = useMutation({
+    mutationFn: ({ id, payload }) =>
+      id ? api.patch(`/api/v1/vehicles/${id}`, payload) : api.post('/api/v1/vehicles', payload),
+    onSuccess: (_, { id }) =>
+      after(id ? 'Vehicle details updated.' : 'Vehicle registered successfully.')(),
+    onError: (err) => addNotification(err.message || 'Could not save the vehicle.', 'error'),
   });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, payload }) => api.patch(`/api/v1/vehicles/${id}`, payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      addNotification('Vehicle details updated.', 'success');
-      setEditingVehicle(null);
-      setShowAddModal(false);
-      resetForm();
-    },
-    onError: (err) => addNotification(err.message || 'Failed to update vehicle.', 'error'),
-  });
-
-  const deleteMutation = useMutation({
+  const remove = useMutation({
     mutationFn: (id) => api.del(`/api/v1/vehicles/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      addNotification('Vehicle deleted.', 'success');
-    },
-    onError: (err) => addNotification(err.message || 'Failed to delete vehicle.', 'error'),
+    onSuccess: after('Vehicle deleted.'),
+    onError: (err) => addNotification(err.message || 'Could not delete the vehicle.', 'error'),
   });
 
-  const resetForm = () => {
-    setCustomerId('');
-    setRegNumber('');
-    setMake('');
-    setModel('');
-    setVariant('');
-    setFuelType('Petrol');
-    setYear('');
-    setVin('');
-    setEngineNumber('');
-    setChassisNumber('');
-    setOdometer('');
+  const open = (row) => {
+    setForm(
+      row
+        ? Object.fromEntries(
+            Object.entries(blank()).map(([key, empty]) => [key, row[key] ?? empty]),
+          )
+        : blank(),
+    );
+    setEditing(row || {});
   };
 
-  const handleOpenEdit = (vehicle) => {
-    setEditingVehicle(vehicle);
-    setCustomerId(vehicle.customer_id || '');
-    setRegNumber(vehicle.registration_number || '');
-    setMake(vehicle.make || '');
-    setModel(vehicle.model || '');
-    setVariant(vehicle.variant || '');
-    setFuelType(vehicle.fuel_type || 'Petrol');
-    setYear(vehicle.year || '');
-    setVin(vehicle.vin || '');
-    setEngineNumber(vehicle.engine_number || '');
-    setChassisNumber(vehicle.chassis_number || '');
-    setOdometer(vehicle.odometer_reading ?? '');
-    setShowAddModal(true);
-  };
-
-  const handleSave = (e) => {
-    e.preventDefault();
-
-    // Validations
-    if (!validateRequired(customerId))
-      return addNotification('Owner account selection is required.', 'error');
-    if (!validateRequired(regNumber))
+  const handleSave = (event) => {
+    event.preventDefault();
+    if (!form.customer_id) return addNotification('Choose the owner.', 'error');
+    if (!form.registration_number.trim())
       return addNotification('Registration number is required.', 'error');
-    if (!validateRequired(make))
-      return addNotification('Vehicle manufacturer make is required.', 'error');
-    if (!validateRequired(model)) return addNotification('Vehicle model is required.', 'error');
-
-    if (!validateVehicleReg(regNumber)) {
+    if (!form.make.trim()) return addNotification('Vehicle make is required.', 'error');
+    if (!form.model.trim()) return addNotification('Vehicle model is required.', 'error');
+    if (!validateVehicleReg(form.registration_number))
       return addNotification(
         'Invalid Indian vehicle registration format (e.g. HR26AB1234).',
         'error',
       );
-    }
-
-    const payload = {
-      customer_id: Number(customerId),
-      registration_number: regNumber.replace(/[-\s]/g, '').toUpperCase(),
-      make,
-      model,
-      variant: variant || null,
-      fuel_type: fuelType,
-      year: year !== '' ? Number(year) : null,
-      vin: vin || null,
-      engine_number: engineNumber || null,
-      chassis_number: chassisNumber || null,
-      odometer_reading: odometer !== '' ? Number(odometer) : null,
-    };
-
-    if (editingVehicle) {
-      updateMutation.mutate({ id: editingVehicle.id, payload });
-    } else {
-      createMutation.mutate(payload);
-    }
-  };
-
-  const handleDelete = (vehicle) => {
-    openDialog({
-      title: 'Delete Vehicle Profile',
-      message: `Are you sure you want to permanently delete vehicle "${vehicle.registration_number}"? This will dissolve invoice history reference records.`,
-      onConfirm: () => deleteMutation.mutate(vehicle.id),
+    const orNull = (value) => value || null;
+    const numberOrNull = (value) => (value !== '' ? Number(value) : null);
+    save.mutate({
+      id: editing.id,
+      payload: {
+        customer_id: Number(form.customer_id),
+        registration_number: form.registration_number.replace(/[-\s]/g, '').toUpperCase(),
+        make: form.make,
+        model: form.model,
+        variant: orNull(form.variant),
+        fuel_type: form.fuel_type,
+        year: numberOrNull(form.year),
+        vin: orNull(form.vin),
+        engine_number: orNull(form.engine_number),
+        chassis_number: orNull(form.chassis_number),
+        // Blank means not read yet; the database keeps 0 then.
+        odometer_reading: Number(form.odometer_reading) || 0,
+      },
     });
   };
 
@@ -178,10 +123,7 @@ export default function VehicleManager() {
     {
       accessorKey: 'make',
       header: 'Make & Model',
-      cell: (info) => {
-        const row = info.row.original;
-        return `${row.make} ${row.model} ${row.variant || ''}`;
-      },
+      cell: ({ row }) => `${row.original.make} ${row.original.model} ${row.original.variant || ''}`,
     },
     {
       accessorKey: 'fuel_type',
@@ -191,10 +133,7 @@ export default function VehicleManager() {
     {
       accessorKey: 'odometer_reading',
       header: 'Odometer',
-      cell: (info) => {
-        const val = info.getValue();
-        return val ? `${val.toLocaleString('en-IN')} km` : '-';
-      },
+      cell: (info) => (info.getValue() ? `${info.getValue().toLocaleString('en-IN')} km` : '-'),
     },
     {
       accessorKey: 'customer_name',
@@ -208,36 +147,31 @@ export default function VehicleManager() {
     {
       id: 'actions',
       header: 'Actions',
-      cell: (info) => {
-        const v = info.row.original;
-        return (
-          <div
-            className="flex items-center justify-center gap-2"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => handleOpenEdit(v)}
-              disabled={!canWrite}
-              title="Edit"
-              aria-label="Edit"
-              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 hover:text-brand-650 disabled:opacity-30 transition-colors"
-            >
-              <Edit2 className="h-4.5 w-4.5" />
-            </button>
-            <button
-              onClick={() => handleDelete(v)}
-              disabled={!canWrite}
-              title="Delete"
-              aria-label="Delete"
-              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-450 hover:text-red-650 disabled:opacity-30 transition-colors"
-            >
-              <Trash2 className="h-4.5 w-4.5" />
-            </button>
-          </div>
-        );
-      },
+      cell: ({ row }) => (
+        <RowActions
+          disabled={!canWrite}
+          onEdit={() => open(row.original)}
+          onDelete={() =>
+            openDialog({
+              title: 'Delete Vehicle',
+              message: `Are you sure you want to permanently delete vehicle "${row.original.registration_number}"? This action cannot be undone.`,
+              onConfirm: () => remove.mutate(row.original.id),
+            })
+          }
+        />
+      ),
     },
   ];
+
+  const field = (key, label, props = {}) => (
+    <TextField
+      id={`vehicle-${key === 'registration_number' ? 'reg' : key.replace('_number', '').replace('_reading', '')}-field`}
+      label={label}
+      value={form[key]}
+      onChange={set(key)}
+      {...props}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -251,11 +185,7 @@ export default function VehicleManager() {
           </p>
         </div>
         <button
-          onClick={() => {
-            resetForm();
-            setEditingVehicle(null);
-            setShowAddModal(true);
-          }}
+          onClick={() => open(null)}
           disabled={!canWrite}
           className="flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
         >
@@ -268,6 +198,7 @@ export default function VehicleManager() {
         <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
         <input
           type="text"
+          aria-label="Search vehicles"
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
@@ -278,263 +209,82 @@ export default function VehicleManager() {
         />
       </div>
 
-      {/* Shared DataTable Component */}
       <DataTable
         columns={columns}
-        data={vehicles}
-        isLoading={isLoading}
-        error={error}
+        data={list.data?.data || []}
+        isLoading={list.isLoading}
+        error={list.error}
         enablePagination={false}
         emptyStateMessage="No matching vehicle accounts found."
       />
-
-      {/* Pagination controls */}
-      {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-between border-t border-gray-250 dark:border-gray-800 pt-4">
-          <button
-            disabled={page === 1}
-            onClick={() => setPage((p) => p - 1)}
-            className="px-3 py-1.5 border border-gray-300 dark:border-gray-700 text-xs font-semibold rounded hover:bg-gray-100 disabled:opacity-50"
-          >
-            Previous
-          </button>
-          <span className="text-xs text-gray-500">
-            Page {page} of {pagination.totalPages}
-          </span>
-          <button
-            disabled={page === pagination.totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="px-3 py-1.5 border border-gray-300 dark:border-gray-700 text-xs font-semibold rounded hover:bg-gray-100 disabled:opacity-50"
-          >
-            Next
-          </button>
-        </div>
+      {totalPages > 1 && (
+        <ServerPagination page={page} totalPages={totalPages} onChange={setPage} />
       )}
 
-      {/* Create / Edit Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <div className="flex items-center gap-2 text-brand-600 dark:text-brand-400">
-                <Car className="h-5 w-5" />
-                <h3 className="text-lg font-bold">
-                  {editingVehicle ? 'Edit Vehicle Profile' : 'Register Customer Vehicle'}
-                </h3>
+      {editing && (
+        <Modal
+          title={editing.id ? 'Edit Vehicle' : 'Register Customer Vehicle'}
+          icon={Car}
+          onClose={() => setEditing(null)}
+        >
+          <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label
+                  htmlFor="vehicle-owner-select"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Owner *
+                </label>
+                <RemoteSelect
+                  id="vehicle-owner-select"
+                  endpoint="/api/v1/customers"
+                  queryKey="customers"
+                  value={form.customer_id}
+                  onChange={(value) => setForm({ ...form, customer_id: value })}
+                  searchLabel="Search owners"
+                  placeholder="Select owner profile..."
+                  optionLabel={(c) => `${c.name} (${c.phone || 'No Phone'})`}
+                />
               </div>
-              <button
-                onClick={() => {
-                  setShowAddModal(false);
-                  setEditingVehicle(null);
-                }}
-                className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              {field('registration_number', 'Registration Number *', {
+                required: true,
+                placeholder: 'E.g. HR26AB1234',
+              })}
+              {field('make', 'Make *', { required: true })}
+              {field('model', 'Model *', { required: true })}
+              {field('variant', 'Variant')}
+              <div>
+                <label
+                  htmlFor="vehicle-fuel-select"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Fuel Type
+                </label>
+                <select
+                  id="vehicle-fuel-select"
+                  value={form.fuel_type}
+                  onChange={set('fuel_type')}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                >
+                  {['Petrol', 'Diesel', 'CNG', 'Electric'].map((fuel) => (
+                    <option key={fuel}>{fuel}</option>
+                  ))}
+                </select>
+              </div>
+              {field('year', 'Manufacture Year', { type: 'number' })}
+              {field('vin', 'VIN Number (17-digit)', { onChange: set('vin', true) })}
+              {field('engine_number', 'Engine Number', { onChange: set('engine_number', true) })}
+              {field('chassis_number', 'Chassis Number', { onChange: set('chassis_number', true) })}
+              {field('odometer_reading', 'Odometer Reading (km)', { type: 'number' })}
             </div>
-
-            <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label
-                    htmlFor="vehicle-owner-select"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Owner *
-                  </label>
-                  <RemoteSelect
-                    id="vehicle-owner-select"
-                    endpoint="/api/v1/customers"
-                    queryKey="customers"
-                    value={customerId}
-                    onChange={setCustomerId}
-                    searchLabel="Search owners"
-                    placeholder="Select owner profile..."
-                    optionLabel={(c) => `${c.name} (${c.phone || 'No Phone'})`}
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-reg-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Registration Number *
-                  </label>
-                  <input
-                    id="vehicle-reg-field"
-                    type="text"
-                    required
-                    value={regNumber}
-                    onChange={(e) => setRegNumber(e.target.value)}
-                    placeholder="E.g. HR26AB1234"
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring font-mono text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-make-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Make *
-                  </label>
-                  <input
-                    id="vehicle-make-field"
-                    type="text"
-                    required
-                    value={make}
-                    onChange={(e) => setMake(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-model-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Model *
-                  </label>
-                  <input
-                    id="vehicle-model-field"
-                    type="text"
-                    required
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-variant-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Variant
-                  </label>
-                  <input
-                    id="vehicle-variant-field"
-                    type="text"
-                    value={variant}
-                    onChange={(e) => setVariant(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-fuel-select"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Fuel Type
-                  </label>
-                  <select
-                    id="vehicle-fuel-select"
-                    value={fuelType}
-                    onChange={(e) => setFuelType(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  >
-                    <option value="Petrol">Petrol</option>
-                    <option value="Diesel">Diesel</option>
-                    <option value="CNG">CNG</option>
-                    <option value="Electric">Electric</option>
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-year-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Manufacture Year
-                  </label>
-                  <input
-                    id="vehicle-year-field"
-                    type="number"
-                    value={year}
-                    onChange={(e) => setYear(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-vin-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    VIN Number (17-digit)
-                  </label>
-                  <input
-                    id="vehicle-vin-field"
-                    type="text"
-                    value={vin}
-                    onChange={(e) => setVin(e.target.value.toUpperCase())}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring font-mono text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-engine-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Engine Number
-                  </label>
-                  <input
-                    id="vehicle-engine-field"
-                    type="text"
-                    value={engineNumber}
-                    onChange={(e) => setEngineNumber(e.target.value.toUpperCase())}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring font-mono text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-chassis-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Chassis Number
-                  </label>
-                  <input
-                    id="vehicle-chassis-field"
-                    type="text"
-                    value={chassisNumber}
-                    onChange={(e) => setChassisNumber(e.target.value.toUpperCase())}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring font-mono text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="vehicle-odometer-field"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Odometer Reading (km)
-                  </label>
-                  <input
-                    id="vehicle-odometer-field"
-                    type="number"
-                    value={odometer}
-                    onChange={(e) => setOdometer(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setEditingVehicle(null);
-                  }}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createMutation.isPending || updateMutation.isPending}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Save Vehicle
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <FormButtons
+              onCancel={() => setEditing(null)}
+              saving={save.isPending}
+              saveLabel="Save Vehicle"
+            />
+          </form>
+        </Modal>
       )}
     </div>
   );

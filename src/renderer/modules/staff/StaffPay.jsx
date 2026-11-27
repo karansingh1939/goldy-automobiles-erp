@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import { localDate } from '../../../../public/local-date.js';
-import { BelowZeroNote } from '../../shared/components/MoneyWarning.jsx';
+import { BelowZeroNote, useMoneyAccounts } from '../../shared/components/MoneyWarning.jsx';
+import { rupees } from '../../shared/format.js';
 
 const input =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-base dark:border-gray-700 dark:bg-gray-800';
@@ -16,8 +17,6 @@ const monthName = (month) => {
       })
     : month;
 };
-const rupees = (value) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(value || 0));
 
 function PayForm({ staff, kind, accounts, month, onDone }) {
   const client = useQueryClient();
@@ -186,12 +185,8 @@ export default function StaffPay() {
     queryKey: ['staff-pay', month],
     queryFn: () => api.get(`/api/v1/staff-pay?month=${month}`),
   });
-  const accountsQuery = useQuery({
-    queryKey: ['money-accounts'],
-    queryFn: () => api.get('/api/v1/accounting/money-accounts'),
-  });
   const rows = Array.isArray(staff.data?.data) ? staff.data.data : [];
-  const accounts = Array.isArray(accountsQuery.data?.data) ? accountsQuery.data.data : [];
+  const accounts = useMoneyAccounts();
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">

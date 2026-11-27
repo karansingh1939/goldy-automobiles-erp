@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { invalidateInventory } from '../../shared/api/inventory-cache.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import { localDate } from '../../../../public/local-date.js';
-import { BelowZeroNote, payingAccount } from '../../shared/components/MoneyWarning.jsx';
+import {
+  BelowZeroNote,
+  bankAccounts,
+  payingAccount,
+  useMoneyAccounts,
+} from '../../shared/components/MoneyWarning.jsx';
 import {
   Field,
   RecordSelect,
@@ -52,13 +57,8 @@ export default function FixedAssetManager() {
   const [confirmId, setConfirmId] = useState(null);
   const { hasPermission } = usePermissions();
   const canWrite = hasPermission('inventory.write');
-  const moneyAccounts = useQuery({
-    queryKey: ['money-accounts'],
-    queryFn: () => api.get('/api/v1/accounting/money-accounts'),
-  });
-  const banks = (Array.isArray(moneyAccounts.data?.data) ? moneyAccounts.data.data : []).filter(
-    (account) => account.kind === 'BANK',
-  );
+  const accounts = useMoneyAccounts();
+  const banks = bankAccounts(accounts);
   const refreshMoney = () => client.invalidateQueries({ queryKey: ['money-accounts'] });
   const save = useInventoryMutation('/api/v1/inventory/assets', () => {
     setForm(empty());
@@ -187,7 +187,7 @@ export default function FixedAssetManager() {
           {form.paid_from !== 'EARLIER' && (
             <BelowZeroNote
               amount={total}
-              account={payingAccount(moneyAccounts.data?.data || [], {
+              account={payingAccount(accounts, {
                 cash: form.paid_from === 'CASH',
                 bankId: form.payment_account_id,
               })}

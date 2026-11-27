@@ -6,6 +6,7 @@ import { invalidateInventory } from '../../shared/api/inventory-cache.js';
 import DataTable from '../../shared/components/DataTable.jsx';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
 import RemoteSelect from '../../shared/components/RemoteSelect.jsx';
+import { rupees } from '../../shared/format.js';
 
 export const inputClass =
   'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800';
@@ -83,7 +84,6 @@ const STATUS_WORDS = {
   REJECTED: 'Rejected',
 };
 const MONEY_FIELD = /(cost|price|amount|total|value|valuation)$/;
-const rupees = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' });
 
 // Plain headings and values for a non-technical owner: Yes/No instead of 1/0,
 // rupees for money.
@@ -92,8 +92,7 @@ export function formatCell(field, value) {
   if (/^is_/.test(field)) return Number(value) ? 'Yes' : 'No';
   if (field === 'status' && STATUS_WORDS[value]) return STATUS_WORDS[value];
   if (/_at$/.test(field)) return formatLocalTimestamp(value);
-  if (MONEY_FIELD.test(field) && Number.isFinite(Number(value)))
-    return rupees.format(Number(value));
+  if (MONEY_FIELD.test(field) && Number.isFinite(Number(value))) return rupees(value);
   return String(value);
 }
 export function columnsFor(fields) {

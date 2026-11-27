@@ -34,7 +34,7 @@ End-to-end desktop smoke test run inside Electron with disposable data: setup, c
 
 ## Server: entry, config and shared code
 
-### `src/server/app.js` (168 lines)
+### `src/server/app.js` (118 lines)
 
 Builds the Express app: loopback-only guard, security headers, JSON body limit, static screens, every feature router under /api/v1, and the error handlers.
 
@@ -61,14 +61,27 @@ Error type with an HTTP status and a code, shown to the owner as a plain message
 
 - `AppError` (class) — App error.
 
-### `src/server/shared/middleware/auth-middleware.js` (48 lines)
+### `src/server/shared/errors/database-error.js` (23 lines)
+
+Turns SQLite constraint failures into plain messages (duplicate, missing related record, in use).
+
+- `fromDatabaseError` — Turns a SQLite constraint failure into a plain message; other errors pass through.
+
+### `src/server/shared/http/respond.js` (20 lines)
+
+Express handler wrappers that send the result as JSON and pass any error to the error handler.
+
+- `respond` — Express handler that sends what fn returns as JSON with the given status. Errors, thrown or rejected, go to the error handler. A handler that sends its own response (a file, CSV) returns nothing.
+- `respondData` — Like respond, wrapping the result as { data }.
+
+### `src/server/shared/middleware/auth-middleware.js` (47 lines)
 
 Checks the sign-in token and the role permissions for each request.
 
 - `authenticate` — Authenticate.
 - `requirePermission` — Require permission.
 
-### `src/server/shared/middleware/error-handler.js` (29 lines)
+### `src/server/shared/middleware/error-handler.js` (31 lines)
 
 Turns errors into JSON responses (404 for unknown routes, the AppError message otherwise).
 
@@ -89,25 +102,39 @@ Short consecutive numbers per financial year: INV/26-27/0001 (GST Rule 46, max 1
 - `short` — Short.
 - `nextDocumentNumber` — Reserves the next number in a series for the date's financial year, inside the caller's transaction (a rollback frees it).
 
-### `src/server/shared/utils/local-date.js` (5 lines)
+### `src/server/shared/utils/local-date.js` (31 lines)
 
 Today's date in the laptop's own time zone (YYYY-MM-DD).
 
 - `localDate` — Business dates follow the laptop's calendar; audit timestamps remain UTC.
+- `addMonths` — Adds whole months to a YYYY-MM-DD date (or the date part of a timestamp), staying on the last day of a shorter month: 31 Jan + 1 month = 28/29 Feb.
+- `monthStart` — First day of the month of a YYYY-MM-DD date.
+- `localDateOf` — The laptop's calendar date of a SQLite UTC timestamp ('YYYY-MM-DD HH:MM:SS').
 
-### `src/server/shared/utils/logger.js` (121 lines)
+### `src/server/shared/utils/logger.js` (68 lines)
 
 Writes rotating log files with timestamps and levels.
 
-- `Logger` (class) — Logger.
-- `log` — Logs a message to stdout/stderr and appends synchronously to the log file. Safe against filesystem locks or errors.
+- `Logger` (class) — Writes startup and shutdown messages to the console and to one log file per day (logs/goldy_erp_YYYY-MM-DD.log). A failed write never stops the app.
+- `log` — Log.
 - `debug` — Debug.
 - `info` — Info.
 - `warn` — Warn.
 - `error` — Error.
-- `onRotateHook` — Hook for future log rotation support
-- `close` — Safe close method for compatibility
 - `getLogger` — Get logger.
+
+### `src/server/shared/utils/numbers.js` (14 lines)
+
+toNumber and roundMoney (rupees to paise), shared by every service.
+
+- `toNumber` — A finite number, or the fallback for empty or non-numeric input.
+- `roundMoney` — Rupees rounded to paise, exactly as every module rounded before it was shared (so stored bills and new ones agree).
+
+### `src/server/shared/utils/report-period.js` (34 lines)
+
+Report date range from a named period (today, this month, this year) or from/to dates.
+
+- `parseReportPeriod` — Report date range from a query: a named period (today, this month, this year, custom) or dateFrom/dateTo (also accepted as from/to). reportName starts the message for an unknown period.
 
 ### `src/server/shared/utils/tokens.js` (10 lines)
 
@@ -115,6 +142,18 @@ Creates random session tokens and stores only their hash.
 
 - `generateToken` — Generate token.
 - `hashToken` — Hash token.
+
+### `src/server/shared/utils/validation.js` (60 lines)
+
+Required fields, page and page size, YYYY-MM-DD dates, pagination block and WHERE clauses from optional filters.
+
+- `hasValue` — True for anything except undefined, null and the empty string.
+- `required` — Required.
+- `parsePaging` — Page number, page size (1-100, default 20), row offset and trimmed search text.
+- `pageInfo` — The pagination block every list endpoint returns.
+- `isIsoDate` — A real calendar date written YYYY-MM-DD (rejects 2026-02-31).
+- `optionalDate` — An optional YYYY-MM-DD date: null when empty, an error when malformed.
+- `sqlWhere` — WHERE clause from [condition, value] pairs, keeping only the filters that were given, with positional parameters: sqlWhere([['a = ?', 1], ['b = ?', '']]) gives { sql: 'WHERE a = ?', params: [1] }.
 
 ## Server: database
 
@@ -127,30 +166,34 @@ Lock file that stops two backups or a backup and a restore running at the same t
 - `recoverOrphanBackupLock` — Recover orphan backup lock.
 - `acquireBackupLock` — Acquire backup lock.
 
-### `src/server/database/backup-service.js` (202 lines)
+### `src/server/database/backup-service.js` (127 lines)
 
 Low-level SQLite backup: copy the live database safely, verify the copy, keep only the newest N automatic backups, daily startup backup.
 
 - `getBackupDirectory` — Get backup directory.
 - `isManagedBackup` — Is managed backup.
-- `BackupService` (class) — Backup service.
-- `createBackup` — Creates a backup copy of the database file in the backups folder. Handles in-memory databases gracefully.
+- `stamp` — Local date and time as YYYY-MM-DD_HH-mm-ss, so file names sort by age.
 - `pad` — Pad.
-- `verifyBackup` — Verifies the backup database file integrity.
-- `enforceRetentionPolicy` — Enforces backup retention policy by keeping only the latest 30 backups.
-- `checkAndRunDailyBackup` — Checks if a silent backup was already performed today. If not, performs one.
+- `BackupService` (class) — Startup safety copies: one silent copy a day and one before every upgrade, kept in the database's own backups folder (newest 30 kept).
+- `backupsDir` — This database's backups folder; null for an in-memory database.
+- `createBackup` — Copies the database (including committed WAL pages); null for an in-memory database.
+- `verifyBackup` — Throws unless the file is a non-empty SQLite database that passes integrity_check.
+- `enforceRetentionPolicy` — Deletes all but the newest 30 startup copies.
+- `checkAndRunDailyBackup` — Makes today's silent copy unless a valid one already exists.
 
-### `src/server/database/connection.js` (231 lines)
+### `src/server/database/connection.js` (188 lines)
 
 Opens the single SQLite connection (WAL, foreign keys, busy wait), runs integrity checks and automatic recovery, and closes/reopens it for restores.
 
-- `ensureRequiredDirectories` — Ensure required directories.
+- `ensureRequiredDirectories` — The data folder and its sibling backups and logs folders.
+- `openChecked` — Opens the file with the app's settings and refuses it if the quick integrity check fails.
 - `createDatabase` — Create database.
 - `readAppConfig` — Read app config.
+- `configuredDatabasePath` — Configured database path.
 - `getDatabase` — Get database.
 - `closeDatabase` — Close database.
 - `reopenDatabase` — Reopen database.
-- `cleanupWalFiles` — Cleanup wal files.
+- `cleanupWalFiles` — Removes the -wal and -shm side files of a closed database.
 
 ### `src/server/database/corruption-recovery-service.js` (118 lines)
 
@@ -159,7 +202,7 @@ If the database file is damaged: keep the damaged copy and restore the newest go
 - `RecoveryResult` (class) — Recovery result.
 - `CorruptionRecoveryService` (class) — Corruption recovery service.
 
-### `src/server/database/db-safety-service.js` (63 lines)
+### `src/server/database/db-safety-service.js` (35 lines)
 
 Confirms the connection is configured safely (foreign keys on, WAL journal, normal sync).
 
@@ -171,7 +214,7 @@ Command-line helper: run migrations and seeds on a database.
 
 - `initializeDatabase` — Initialize database.
 
-### `src/server/database/integrity-check-service.js` (47 lines)
+### `src/server/database/integrity-check-service.js` (28 lines)
 
 Runs SQLite integrity_check and reports whether the file is healthy.
 
@@ -199,7 +242,7 @@ Finds the migrations folder and applies pending migrations in order.
 - `run` — Runs the sequential migration process.
 - `runMigrations` — Legacy wrapper function to preserve backward compatibility for existing tests/files.
 
-### `src/server/database/migration-service.js` (272 lines)
+### `src/server/database/migration-service.js` (253 lines)
 
 Applies each migration inside a transaction, after a safety backup, and refuses edited or duplicate migration files (checksums).
 
@@ -218,25 +261,25 @@ Runs the numbered seed files once each (roles, permissions, warehouses, categori
 
 Command-line helper: run seeds.
 
-### `src/server/database/seeds/001_core_seed.js` (135 lines)
+### `src/server/database/seeds/001_core_seed.js` (104 lines)
 
 Seeds the company, roles, permissions and the chart of accounts (system ledgers).
 
 - `run` — Run.
 
-### `src/server/database/seeds/002_inventory_categories_seed.js` (26 lines)
+### `src/server/database/seeds/002_inventory_categories_seed.js` (22 lines)
 
 Seeds stock categories (spare parts, lubricants, filters ...).
 
 - `run` — Run.
 
-### `src/server/database/seeds/003_warehouses_seed.js` (26 lines)
+### `src/server/database/seeds/003_warehouses_seed.js` (22 lines)
 
 Seeds the godowns (Main, Oil, Battery, Tyre store).
 
 - `run` — Run.
 
-### `src/server/database/seeds/004_inventory_starter_seed.js` (20 lines)
+### `src/server/database/seeds/004_inventory_starter_seed.js` (15 lines)
 
 Loads the starter catalogue of common parts on a new install (not in tests).
 
@@ -244,28 +287,27 @@ Loads the starter catalogue of common parts on a new install (not in tests).
 
 ## Server: feature modules
 
-### `src/server/modules/accounting/accounting-report.service.js` (363 lines)
+### `src/server/modules/accounting/accounting-report.service.js` (390 lines)
 
 Trial balance, profit and loss and balance sheet from the journal.
 
-- `roundMoney` — Helper to round financial values safely to 2 decimal places.
-- `AccountingReportService` (class) — Service to generate GAAP-compliant financial statements and ledger statements. Executes balance aggregation directly from database journals.
+- `AccountingReportService` (class) — Trial balance, profit and loss, balance sheet, and the ledger and voucher lists. Executes balance aggregation directly from database journals.
+- `listLedgers` — Every ledger with its group name, A to Z.
+- `listVouchers` — Vouchers, newest first, filtered by date range, type and number/narration text.
 - `getTrialBalance` — Generates a Trial Balance as of a specific date.
 - `getProfitLoss` — Generates a Profit & Loss statement for a date range.
 - `getBalanceSheet` — Generates a Balance Sheet as of a specific date.
 
-### `src/server/modules/accounting/accounting.routes.js` (442 lines)
+### `src/server/modules/accounting/accounting.routes.js` (207 lines)
 
 Accounting API: receivables, daily cash, money accounts and entries, refunds, opening balances, receipts, supplier payments, counter-sale bills, vouchers, ledgers, reports and the admin reconciliation check.
 
 - `createAccountingRouter` — Create accounting router.
-- `handle` — Handle.
 
-### `src/server/modules/accounting/allocation.service.js` (424 lines)
+### `src/server/modules/accounting/allocation.service.js` (421 lines)
 
 Matches payments to bills (oldest first or named bills), undoes matches, and releases payments as advance when a bill is cancelled.
 
-- `roundMoney` — Round money.
 - `releaseDocumentAllocations` — Unlinks every customer payment from one bill that is being cancelled. The money stays on each receipt as unused (an advance the customer has with us), which is what really happened: the cash was recei
 - `AllocationService` (class) — Service to manage invoice/bill matching and payment allocations polymorphically. Supports both CUSTOMER and SUPPLIER modes.
 - `allocateReceiptFIFO` — Uses a customer receipt to pay their oldest unpaid bills first.
@@ -293,24 +335,24 @@ Refuses a credit bill that would take a customer over their credit limit.
 
 - `assertCustomerCreditLimit` — Refuses a credit bill that would take the customer past their credit limit.
 
-### `src/server/modules/accounting/customer-receipt.service.js` (219 lines)
+### `src/server/modules/accounting/customer-receipt.service.js` (216 lines)
 
 Money received from customers: receipt voucher, matching to bills, cancelling a receipt.
 
-- `roundMoney` — Round money.
 - `CustomerReceiptService` (class) — Service to handle customer payments, deposits, advances, and cancellations.
 - `createReceipt` — Records money received from a customer (cash or bank), posts the receipt voucher and pays named bills or the oldest ones.
 - `cancelReceipt` — Cancels a receipt: unmatches it from bills and reverses its voucher.
 - `allocateReceiptManual` — Manually allocates a receipt balance to outstanding invoices.
 
-### `src/server/modules/accounting/direct-billing.service.js` (511 lines)
+### `src/server/modules/accounting/direct-billing.service.js` (541 lines)
 
 Counter sale bills (CS/26-27/0001): stock out at weighted cost, GST split, sales and cost vouchers, walk-in customer, cancellation with stock back.
 
-- `roundMoney` — Round money.
 - `DirectBillingService` (class) — Service to manage direct (non-job-card) counter billing.
 - `deductStock` — Takes counter-sale stock out of the godown batch by batch and returns its weighted cost.
-- `walkInCustomerId` — Creates a direct counter invoice. / /** The shared customer record used for walk-in counter sales without a name.
+- `walkInCustomerId` — The shared customer record used for walk-in counter sales without a name.
+- `listDirectInvoices` — Latest 200 counter bills, optionally for one customer or status.
+- `getDirectInvoice` — One counter bill with its lines.
 - `createDirectInvoice` — Makes a counter-sale bill: number, stock out, GST split (CGST/SGST or IGST), credit limit check, sales and cost-of-goods vouchers.
 - `cancelDirectInvoice` — Cancels a counter bill: stock back to its batches, vouchers reversed, any payment kept as the customer's advance.
 
@@ -322,7 +364,15 @@ Finds ledger ids by their fixed system key (cash_in_hand, inventory_stock ...) w
 - `getLedgerId` — Resolves the ledger ID for a given company and system key. Uses cached results or queries and caches the lookup on cache miss (lazy loading).
 - `getSystemLedger` — Resolves the entire ledger row for a given company and system key.
 
-### `src/server/modules/accounting/money.service.js` (441 lines)
+### `src/server/modules/accounting/ledgers.js` (78 lines)
+
+Creating ledgers in one place: system accounts made on first use, and picking the cash or bank ledger for a payment.
+
+- `insertLedger` — Account groups seeded by migration 024. */ export const LedgerGroup = Object.freeze({ CURRENT_ASSETS: 2, FIXED_ASSETS: 3, CURRENT_LIABILITIES: 5, NON_CURRENT_LIABILITIES: 6, INDIRECT_INCOME: 10, }); S
+- `systemLedgerId` — A system ledger by its key, created on first use for the on-demand ones.
+- `cashOrBankLedgerId` — The ledger money leaves from or arrives in: Cash, or a bank account (the chosen one, or the only one when there is just one).
+
+### `src/server/modules/accounting/money.service.js` (419 lines)
 
 Money In / Out in plain words: cash and banks, other money in/out, customer refunds, last entries with cancel, opening balances from old books.
 
@@ -337,7 +387,6 @@ Money In / Out in plain words: cash and banks, other money in/out, customer refu
 - `restoreAdvance` — Undoing a refund gives the customer their advance back on their receipts.
 - `recordOpeningBalances` — Posts starting balances from old books (cash, banks, customer and supplier dues) against the owner's capital.
 - `ledgerForKey` — Finds a system ledger, creating Loans, Other Income or Staff Advances on first use.
-- `insertLedger` — Creates a ledger with its running balance row.
 
 ### `src/server/modules/accounting/period-lock.service.js` (155 lines)
 
@@ -349,7 +398,7 @@ Indian financial years (April-March): creates years as needed and refuses postin
 - `findYear` — 2. Validate Financial Year boundary status
 - `ensureFinancialYear` — Creates financial years up to the one containing the date.
 
-### `src/server/modules/accounting/posting-engine.service.js` (458 lines)
+### `src/server/modules/accounting/posting-engine.service.js` (399 lines)
 
 The double-entry engine: every voucher must balance, gets a number and running balances; vouchers are reversed, never deleted; customer and supplier ledgers are created on demand.
 
@@ -361,31 +410,28 @@ The double-entry engine: every voucher must balance, gets a number and running b
 - `updateRunningBalance` — Keeps each ledger's running balance current.
 - `getOrCreateCustomerLedger` — The customer's own ledger, created on first use.
 - `getOrCreateSupplierLedger` — The supplier's own ledger, created on first use.
+- `partyLedger` — Reuses the party's ledger (or one with the same name) or creates it, and links it.
 
-### `src/server/modules/accounting/reconciliation.service.js` (377 lines)
+### `src/server/modules/accounting/reconciliation.service.js` (328 lines)
 
 Admin check that ledgers, allocations, trial balance, stock and return limits agree, with a repair for running balances.
 
-- `roundMoney` — Round money.
 - `ReconciliationService` (class) — Service to execute system-wide data integrity and accounting checks. Detects discrepancies between document statuses, ledger balances, and allocation audit trails.
 - `runReconciliation` — Run all reconciliation checks.
 - `checkLedgerBalances` — Verifies that cached ledger_balances match the sum of detailed journal entries.
 - `checkAllocationIntegrity` — Verifies that customer receipts and invoice amount_paid figures match receipt_allocations entries, and verifies that supplier payments and purchase_bill amount_paid figures match supplier_allocations.
 - `checkTrialBalanceBalanced` — Verifies that the net sum of all ledgers is 0 (double-entry Trial Balance balance checks).
-- `repairLedgerBalances` — Re-calculates and repairs cached ledger balances in ledger_balances.
 - `checkInventoryStockIntegrity` — Check inventory stock integrity.
 - `checkReturnLimitsIntegrity` — Check return limits integrity.
 
-### `src/server/modules/accounting/supplier-payment.service.js` (313 lines)
+### `src/server/modules/accounting/supplier-payment.service.js` (278 lines)
 
 Payments to suppliers: payment voucher, Supplier Ledger row, cancelling a payment.
 
-- `roundMoney` — Round money.
 - `recordSupplierLedger` — Adds the payment, or its cancellation, to the Supplier Ledger.
 - `SupplierPaymentService` (class) — Service to manage Supplier Payments, payment vouchers, and allocations.
 - `createPayment` — Pays a supplier from cash or bank: payment voucher, Supplier Ledger row, matching to bills.
 - `getPayment` — Retrieves a single supplier payment details.
-- `listPayments` — Lists supplier payments with filters.
 - `cancelPayment` — Cancels a supplier payment: voucher reversed, matches undone, Supplier Ledger amount added back.
 
 ### `src/server/modules/accounting/voucher-number.service.js` (98 lines)
@@ -408,23 +454,21 @@ Queries for unpaid bills, customer balances, the cash book and cash counts.
 - `counts` — Counts.
 - `saveCount` — Save count.
 
-### `src/server/modules/accounting/workshop-finance.service.js` (144 lines)
+### `src/server/modules/accounting/workshop-finance.service.js` (146 lines)
 
 Dues & Daily Cash: who owes money and for how long, and the daily cash count.
 
-- `money` — Money.
 - `WorkshopFinanceService` (class) — Workshop finance service.
 - `ageing` — Unpaid bills grouped by days unpaid, and each customer's balance or advance.
 - `validateDate` — Validate date.
 - `cashSummary` — Cash summary.
 - `saveCount` — Saves a cash count with the book balance at that moment; no accounting change.
 
-### `src/server/modules/audit/audit.controller.js` (26 lines)
+### `src/server/modules/audit/audit.controller.js` (23 lines)
 
 Audit Log API handler.
 
 - `AuditController` (class) — Audit controller.
-- `list` — List.
 
 ### `src/server/modules/audit/audit.repository.js` (122 lines)
 
@@ -449,25 +493,17 @@ Thin service over the audit repository.
 - `list` — List.
 - `createAuditService` — Create audit service.
 
-### `src/server/modules/audit/audit.validator.js` (50 lines)
+### `src/server/modules/audit/audit.validator.js` (29 lines)
 
 Validates Audit Log filters.
 
-- `hasValue` — Has value.
-- `normalizeDate` — Normalize date.
 - `parseAuditListQuery` — Parse audit list query.
 
-### `src/server/modules/auth/auth.controller.js` (66 lines)
+### `src/server/modules/auth/auth.controller.js` (36 lines)
 
 Sign-in API handlers: first-run setup, login, logout, forgot password, who is signed in.
 
 - `AuthController` (class) — Auth controller.
-- `getSetupStatus` — Get setup status.
-- `setup` — Setup.
-- `forgotPassword` — Forgot password.
-- `login` — Login.
-- `logout` — Logout.
-- `me` — Who is signed in (used to check that a session is still valid).
 
 ### `src/server/modules/auth/auth.repository.js` (234 lines)
 
@@ -515,19 +551,12 @@ Creates the first administrator with a recovery code, checks passwords (bcrypt),
 - `logout` — Revokes the session.
 - `getUserByToken` — Finds the signed-in user and their permissions for a token.
 
-### `src/server/modules/backup/backup.controller.js` (131 lines)
+### `src/server/modules/backup/backup.controller.js` (97 lines)
 
 Backup API handlers: health, back up now, list, verify, schedule settings, restore latest or from a file.
 
 - `BackupController` (class) — Backup controller.
-- `health` — Health.
-- `manualBackup` — Manual backup.
-- `list` — List.
-- `verifyBackup` — Verify backup.
-- `getSettings` — Get settings.
-- `updateSettings` — Update settings.
 - `restoreUploadedDatabase` — Restore uploaded database.
-- `restoreLatestBackup` — Restore latest backup.
 
 ### `src/server/modules/backup/backup.repository.js` (171 lines)
 
@@ -594,14 +623,11 @@ Opens a backup copy on its own and checks it would restore (integrity and migrat
 
 - `verifyBackupSnapshot` — Exercise the restore migration path on an isolated copy, never the live database.
 
-### `src/server/modules/crm/crm.controller.js` (31 lines)
+### `src/server/modules/crm/crm.controller.js` (16 lines)
 
 Service reminder API handlers.
 
 - `CrmController` (class) — Crm controller.
-- `listReminders` — List reminders.
-- `createReminder` — Create reminder.
-- `dismissReminder` — Dismiss reminder.
 
 ### `src/server/modules/crm/crm.repository.js` (52 lines)
 
@@ -630,15 +656,11 @@ Schedules, lists and dismisses service reminders for a car.
 - `dismissReminder` — Dismiss reminder.
 - `createCrmService` — Create crm service.
 
-### `src/server/modules/dashboard/dashboard.controller.js` (42 lines)
+### `src/server/modules/dashboard/dashboard.controller.js` (18 lines)
 
 Home screen API handlers.
 
 - `DashboardController` (class) — Dashboard controller.
-- `getOperationsMetrics` — Get operations metrics.
-- `getFinancialMetrics` — Get financial metrics.
-- `getInventoryMetrics` — Get inventory metrics.
-- `getSalesMetrics` — Get sales metrics.
 
 ### `src/server/modules/dashboard/dashboard.repository.js` (161 lines)
 
@@ -658,12 +680,10 @@ Home screen routes.
 
 - `createDashboardRouter` — Create dashboard router.
 
-### `src/server/modules/dashboard/dashboard.service.js` (161 lines)
+### `src/server/modules/dashboard/dashboard.service.js` (142 lines)
 
 Home screen numbers: sales today/month, profit after expenses, what customers owe, cars in the workshop, stock value and low stock.
 
-- `normalizeDate` — Normalize date.
-- `firstDayOfMonth` — First day of month.
 - `DashboardService` (class) — Dashboard service.
 - `getOperationsMetrics` — Cars in the workshop and job card counts for the day.
 - `getFinancialMetrics` — Sales today and this month, profit after expenses, and what customers owe.
@@ -671,23 +691,17 @@ Home screen numbers: sales today/month, profit after expenses, what customers ow
 - `getInventoryMetrics` — Stock value, item counts and low stock.
 - `createDashboardService` — Create dashboard service.
 
-### `src/server/modules/expenses/expense.controller.js` (60 lines)
+### `src/server/modules/expenses/expense.controller.js` (22 lines)
 
 Expenses API handlers.
 
 - `ExpenseController` (class) — Expense controller.
-- `list` — List.
-- `get` — Get.
-- `summary` — Summary.
-- `create` — Create.
-- `update` — Update.
-- `delete` — Delete.
 
-### `src/server/modules/expenses/expense.repository.js` (166 lines)
+### `src/server/modules/expenses/expense.repository.js` (167 lines)
 
 Expenses in the database, with filters and totals.
 
-- `whereClause` — Where clause.
+- `whereClause` — WHERE clause for expense filters (category, date range), with named parameters.
 - `ExpenseRepository` (class) — Expense repository.
 - `transaction` — Transaction.
 - `list` — List.
@@ -703,11 +717,10 @@ Expenses routes.
 
 - `createExpenseRouter` — Create expense router.
 
-### `src/server/modules/expenses/expense.service.js` (220 lines)
+### `src/server/modules/expenses/expense.service.js` (172 lines)
 
 Records, edits and deletes expenses with a payment voucher from cash or the chosen bank.
 
-- `normalizeDatabaseError` — Normalize database error.
 - `ExpenseService` (class) — Expense service.
 - `list` — List.
 - `get` — Get.
@@ -720,27 +733,21 @@ Records, edits and deletes expenses with a payment voucher from cash or the chos
 - `cancelExpensePosting` — Reverses an expense voucher.
 - `createExpenseService` — Create expense service.
 
-### `src/server/modules/expenses/expense.validator.js` (157 lines)
+### `src/server/modules/expenses/expense.validator.js` (137 lines)
 
 Validates expense entries and list filters.
 
-- `hasValue` — Has value.
-- `normalizeDate` — Normalize date.
 - `normalizeCategory` — Normalize category.
 - `normalizeAmount` — Normalize amount.
 - `normalizeDescription` — Normalize description.
 - `validateExpensePayload` — Validate expense payload.
 - `parseExpenseListQuery` — Parse expense list query.
 
-### `src/server/modules/gst/gst.controller.js` (38 lines)
+### `src/server/modules/gst/gst.controller.js` (16 lines)
 
 GST report API handlers.
 
 - `GstController` (class) — Gst controller.
-- `summary` — Summary.
-- `gstr1` — Gstr1.
-- `gstr3b` — Gstr3b.
-- `hsnSummary` — Hsn summary.
 
 ### `src/server/modules/gst/gst.repository.js` (392 lines)
 
@@ -756,23 +763,16 @@ GST queries: outward supplies by line, credit notes, input tax, HSN/SAC totals.
 - `amount` — Amount.
 - `hsnSummary` — Dynamic HSN/SAC summary report.
 
-### `src/server/modules/gst/gst.routes.js` (52 lines)
+### `src/server/modules/gst/gst.routes.js` (45 lines)
 
 GST routes: summary, GSTR-1, GSTR-3B, HSN and the GSTR-1 CSV files.
 
 - `createGstRouter` — Create gst router.
 
-### `src/server/modules/gst/gst.service.js` (215 lines)
+### `src/server/modules/gst/gst.service.js` (139 lines)
 
 Period handling and shaping of GST summary, GSTR-1, GSTR-3B and HSN reports.
 
-- `money` — Money.
-- `todayString` — Today string.
-- `firstDayOfMonth` — First day of month.
-- `firstDayOfYear` — First day of year.
-- `normalizePeriod` — Normalize period.
-- `normalizeDate` — Normalize date.
-- `parseFilters` — Parse filters.
 - `mapSummaryRow` — Map summary row.
 - `mapGstr1Row` — Map gstr1 row.
 - `mapGstr3bDataset` — Map gstr3b dataset.
@@ -809,36 +809,13 @@ GSTR-1 files for the CA in the GST offline tool layout: B2B, B2C small, credit n
 - `csv` — Csv.
 - `cell` — Cell.
 
-### `src/server/modules/inventory/inventory.controller.js` (211 lines)
+### `src/server/modules/inventory/inventory.controller.js` (84 lines)
 
 Stock API handlers.
 
 - `InventoryController` (class) — Inventory controller.
-- `listItems` — List items.
-- `getItem` — Get item.
-- `getItemBatches` — Get item batches.
-- `createItem` — Create item.
-- `updateItem` — Update item.
-- `createOpeningStock` — Create opening stock.
-- `createAdjustment` — Create adjustment.
-- `transferStock` — Transfer stock.
-- `stockSummary` — Stock summary.
-- `stockValuation` — Stock valuation.
-- `movements` — Movements.
-- `lowStock` — Low stock.
-- `seedStarter` — Seed starter.
-- `getSeedStatus` — Get seed status.
-- `listFixedAssets` — List fixed assets.
-- `createFixedAsset` — Create fixed asset.
-- `cancelFixedAsset` — Cancel fixed asset.
-- `listStockVerifications` — List stock verifications.
-- `verifyStock` — Verify stock.
-- `dashboardStats` — Dashboard stats.
-- `bulkSave` — Bulk save.
-- `approveVerification` — Approve verification.
-- `rejectVerification` — Reject verification.
 
-### `src/server/modules/inventory/inventory.repository.js` (576 lines)
+### `src/server/modules/inventory/inventory.repository.js` (578 lines)
 
 Stock queries: items, batches, movements, adjustments, transfers, counts, fixed assets, low stock.
 
@@ -874,15 +851,10 @@ Stock routes.
 
 - `createInventoryRouter` — Create inventory router.
 
-### `src/server/modules/inventory/inventory.service.js` (1776 lines)
+### `src/server/modules/inventory/inventory.service.js` (1464 lines)
 
 The stock engine: items, batches, stock in/out with weighted average cost, opening stock, adjustments with accounting, godown moves, counts with approval, valuation, reports, fixed assets, starter catalogue and bulk counts.
 
-- `number` — Number.
-- `money` — Money.
-- `required` — Required.
-- `code` — Code.
-- `normalizeDatabaseError` — Normalize database error.
 - `InventoryService` (class) — Inventory service.
 - `assertWarehousePermission` — Stock can only move in or out of a godown that is switched on.
 - `listItems` — List items.
@@ -893,6 +865,9 @@ The stock engine: items, batches, stock in/out with weighted average cost, openi
 - `validateItemPayload` — Validate item payload.
 - `createOpeningStock` — Adds starting stock with its value and posts it to the accounts.
 - `createAdjustment` — Adds or removes stock (damaged, lost, expired, correction) and posts the value change.
+- `ledger` — Ledger.
+- `batchForAdding` — Batch to add stock to: the one named, else the newest in that godown, else a new "-OPEN" one.
+- `batchForRemoving` — Batch to take stock from: the one named, else the oldest with stock, else the newest, else an empty "-OPEN" batch (stockOut then reports no stock).
 - `transferStock` — Moves stock from one godown to another at once; the value does not change.
 - `receiveTransfer` — Puts moved stock into the destination godown and marks the move complete.
 - `getAvailableQuantity` — Stock on hand for an item, optionally in one godown or one batch.
@@ -902,16 +877,18 @@ The stock engine: items, batches, stock in/out with weighted average cost, openi
 - `stockValuation` — Stock value by average cost, FIFO, batch, or as on a past date.
 - `movementReport` — Movement report.
 - `lowStockReport` — Low stock report.
+- `starterLoaded` — True once the starter catalogue was loaded, or when items already exist.
 - `getSeedStatus` — Get seed status.
 - `seedStarter` — Loads the starter catalogue of common parts once.
+- `markLoaded` — Mark loaded.
 - `listFixedAssets` — List fixed assets.
 - `createFixedAsset` — Registers workshop equipment separately from stock for sale.
 - `text` — Text.
 - `cancelFixedAsset` — Wrongly entered equipment is cancelled and its money entry reversed.
-- `equipmentLedgerId` — The "Workshop Equipment" account under Fixed Assets, made on first use.
 - `assetPaymentLedgerId` — Cash, the chosen (or only) bank account, or capital for equipment bought earlier.
 - `listStockVerifications` — List stock verifications.
 - `verifyStock` — Records a stock count as waiting for approval.
+- `pendingVerification` — A stock count that is still waiting for approval, in a godown that is switched on.
 - `approveVerification` — Approves a count and posts the difference as an adjustment.
 - `rejectVerification` — Rejects a count without changing stock.
 - `dashboardStats` — Dashboard stats.
@@ -925,21 +902,23 @@ The starter list of common workshop parts loaded on a new install.
 
 - `getStarterCatalog` — Get starter catalog.
 
-### `src/server/modules/job-cards/job-card.controller.js` (111 lines)
+### `src/server/modules/job-cards/intake-lookup.service.js` (116 lines)
+
+New job card lookups: returning customer by phone, known vehicle by registration with its service summary; phone and registration clean-up.
+
+- `localPhone` — Digits of a phone typed any way, without a +91 or 0 prefix.
+- `normalizeRegistration` — Registration number letters and digits only, upper case: "hr-26 ab 1234" -> "HR26AB1234".
+- `IntakeLookupService` (class) — New job card lookups: a returning customer by phone and a known vehicle by registration number, with its service history in short.
+- `customerRowByPhone` — The customer row whose phone matches (last 10 digits for a mobile number).
+- `vehicleRow` — The vehicle row for a normalized registration number.
+- `findCustomerByPhone` — Customer and vehicles for a phone typed any way (+91, 0, spaces); null when new.
+- `findVehicleByRegistration` — Vehicle, owner and service summary for a registration typed any way; null when new.
+
+### `src/server/modules/job-cards/job-card.controller.js` (51 lines)
 
 Job card and workshop bill API handlers.
 
 - `JobCardController` (class) — Job card controller.
-- `list` — List.
-- `get` — Get.
-- `create` — Create.
-- `addPart` — Add part.
-- `removeLine` — Remove line.
-- `cancel` — Cancel.
-- `addLabour` — Add labour.
-- `finalize` — Finalize.
-- `getInvoice` — Get invoice.
-- `cancelInvoice` — Cancel invoice.
 
 ### `src/server/modules/job-cards/job-card.repository.js` (658 lines)
 
@@ -971,20 +950,16 @@ Job cards, their parts and labour, invoices and profit records in the database.
 - `cancelInvoice` — Cancel invoice.
 - `reverseProfitRecord` — Reverse profit record.
 
-### `src/server/modules/job-cards/job-card.routes.js` (179 lines)
+### `src/server/modules/job-cards/job-card.routes.js` (52 lines)
 
 Job card, bill and vehicle-intake routes.
 
 - `createJobCardRouter` — Create job card router.
 
-### `src/server/modules/job-cards/job-card.service.js` (1129 lines)
+### `src/server/modules/job-cards/job-card.service.js` (906 lines)
 
 Job cards from intake to bill: find or create customer and car, add/remove parts and labour, make the GST bill (INV/26-27/0001) with stock out and vouchers, cancel a job or a bill (stock back, payment kept as advance).
 
-- `number` — Number.
-- `money` — Money.
-- `required` — Required.
-- `normalizeDatabaseError` — Normalize database error.
 - `parseListQuery` — Parse list query.
 - `gstAmounts` — Gst amounts.
 - `JobCardService` (class) — Job card service.
@@ -992,6 +967,7 @@ Job cards from intake to bill: find or create customer and car, add/remove parts
 - `get` — Get.
 - `create` — Opens a job card (JC/26-27/0001) for a customer and car, with odometer and checklist.
 - `createIntake` — Create intake.
+- `updateChanged` — Saves the fields the job card form filled in differently (customer_name maps to name); blank fields never wipe what is stored.
 - `addPart` — Adds a part from a batch with price and GST; stock is taken only when billed.
 - `addLabour` — Adds labour or an outside job with its charge and GST.
 - `removeLine` — Removes a wrong part or labour line from an open job card.
@@ -1008,16 +984,11 @@ Job cards from intake to bill: find or create customer and car, add/remove parts
 
 Field rules for the simple record types: customers, suppliers, vehicles, godowns, categories.
 
-### `src/server/modules/masters/master.controller.js` (51 lines)
+### `src/server/modules/masters/master.controller.js` (21 lines)
 
 Generic list/get/create/update/delete handlers.
 
 - `MasterController` (class) — Master controller.
-- `list` — List.
-- `get` — Get.
-- `create` — Create.
-- `update` — Update.
-- `delete` — Delete.
 
 ### `src/server/modules/masters/master.repository.js` (190 lines)
 
@@ -1040,11 +1011,10 @@ Registers a router for each master record type.
 - `createMasterRouter` — Create master router.
 - `registerMasterRoutes` — Register master routes.
 
-### `src/server/modules/masters/master.service.js` (170 lines)
+### `src/server/modules/masters/master.service.js` (127 lines)
 
 Validates master records and links between them.
 
-- `normalizeDatabaseError` — Normalize database error.
 - `MasterService` (class) — Master service.
 - `list` — List.
 - `get` — Get.
@@ -1053,29 +1023,25 @@ Validates master records and links between them.
 - `delete` — Delete.
 - `validateRelations` — Validate relations.
 
-### `src/server/modules/masters/master.validator.js` (146 lines)
+### `src/server/modules/masters/master.validator.js` (130 lines)
 
 Field validation for master records.
 
-- `hasValue` — Has value.
 - `normalizeValue` — Normalize value.
 - `validateValue` — Validate value.
 - `validatePayload` — Validate payload.
-- `parseListQuery` — Parse list query.
 
-### `src/server/modules/profit/profit.controller.js` (17 lines)
+### `src/server/modules/profit/profit.controller.js` (12 lines)
 
 Tally export handler.
 
 - `ProfitController` (class) — Profit controller.
-- `tallyExport` — Tally export.
 
-### `src/server/modules/profit/profit.repository.js` (280 lines)
+### `src/server/modules/profit/profit.repository.js` (262 lines)
 
 Profit queries (sales, cost, expenses, by customer) and vouchers for the Tally file.
 
 - `invoiceWhereClause` — Invoice where clause.
-- `expenseWhereClause` — Expense where clause.
 - `ProfitRepository` (class) — Profit repository.
 - `summary` — Summary.
 - `profitByCustomer` — Profit by customer.
@@ -1088,17 +1054,10 @@ Tally export route.
 
 - `createProfitRouter` — Create profit router.
 
-### `src/server/modules/profit/profit.service.js` (291 lines)
+### `src/server/modules/profit/profit.service.js` (216 lines)
 
 Profit summary and best customers for Home, and the Tally Prime XML export.
 
-- `money` — Money.
-- `todayString` — Today string.
-- `firstDayOfMonth` — First day of month.
-- `firstDayOfYear` — First day of year.
-- `normalizePeriod` — Normalize period.
-- `normalizeDate` — Normalize date.
-- `parseFilters` — Parse filters.
 - `totalsRow` — Totals row.
 - `ProfitService` (class) — Profit service.
 - `summary` — Sales, cost, gross profit, expenses and net profit for a period (feeds Home).
@@ -1107,17 +1066,11 @@ Profit summary and best customers for Home, and the Tally Prime XML export.
 - `escapeXml` — Escape xml.
 - `createProfitService` — Create profit service.
 
-### `src/server/modules/purchasing/purchasing.controller.js` (60 lines)
+### `src/server/modules/purchasing/purchasing.controller.js` (28 lines)
 
 Buy Stock API handlers.
 
 - `PurchasingController` (class) — Purchasing controller.
-- `listOrders` — List orders.
-- `createOrder` — Create order.
-- `listReceipts` — List receipts.
-- `getReceipt` — Get receipt.
-- `createReceipt` — Create receipt.
-- `getSupplierLedger` — Get supplier ledger.
 
 ### `src/server/modules/purchasing/purchasing.repository.js` (398 lines)
 
@@ -1150,15 +1103,10 @@ Buy Stock and Supplier Ledger routes.
 
 - `createPurchasingRouter` — Create purchasing router.
 
-### `src/server/modules/purchasing/purchasing.service.js` (554 lines)
+### `src/server/modules/purchasing/purchasing.service.js` (496 lines)
 
 Purchase orders and supplier bills: stock in at cost, new selling price, input GST and purchase voucher, Supplier Ledger row.
 
-- `number` — Number.
-- `money` — Money.
-- `required` — Required.
-- `normalizeDatabaseError` — Normalize database error.
-- `parseListQuery` — Parse list query.
 - `lineAmounts` — Line amounts.
 - `PurchasingService` (class) — Purchasing service.
 - `listOrders` — List orders.
@@ -1175,11 +1123,10 @@ Purchase orders and supplier bills: stock in at cost, new selling price, input G
 - `getSupplierLedger` — Supplier Ledger rows with readable bill, payment and return numbers.
 - `createPurchasingService` — Create purchasing service.
 
-### `src/server/modules/purchasing/supplier-ledger.js` (36 lines)
+### `src/server/modules/purchasing/supplier-ledger.js` (35 lines)
 
 Adds a Supplier Ledger row (bill, payment or return) with the running amount owed.
 
-- `roundMoney` — The Supplier Ledger screen reads supplier_ledgers: one row per bill, payment or return with the running amount still owed. Every money movement with a supplier must add a row here, in the same transac
 - `recordSupplierLedgerEntry` — Adds a Supplier Ledger row and returns the new amount owed.
 
 ### `src/server/modules/restore/restore.service.js` (285 lines)
@@ -1192,21 +1139,13 @@ Restores a backup safely: checks it is a Goldy database, keeps a pre-restore cop
 - `RestoreService` (class) — Restore service.
 - `restoreDatabase` — Restores a backup: checks it, keeps a pre-restore copy, swaps the files, reopens and audits.
 
-### `src/server/modules/returns/returns.controller.js` (97 lines)
+### `src/server/modules/returns/returns.controller.js` (66 lines)
 
 Returns API handlers.
 
 - `ReturnsController` (class) — Returns controller.
-- `createCustomerReturn` — Create customer return.
-- `completeCustomerReturn` — Complete customer return.
-- `cancelCustomerReturn` — Cancel customer return.
-- `listCustomerReturns` — List customer returns.
-- `createSupplierReturn` — SUPPLIER RETURNS
-- `completeSupplierReturn` — Complete supplier return.
-- `cancelSupplierReturn` — Cancel supplier return.
-- `listSupplierReturns` — List supplier returns.
 
-### `src/server/modules/returns/returns.repository.js` (470 lines)
+### `src/server/modules/returns/returns.repository.js` (437 lines)
 
 Customer and supplier returns and their lines in the database.
 
@@ -1246,12 +1185,11 @@ Customer returns (credit note CN/..: stock back if good, GST and profit reversed
 - `completeSupplierReturn` — Approves it: stock out, input GST reversed, debit note voucher, Supplier Ledger lowered.
 - `cancelSupplierReturn` — Cancels a draft supplier return.
 
-### `src/server/modules/service-history/service-history.controller.js` (26 lines)
+### `src/server/modules/service-history/service-history.controller.js` (24 lines)
 
 Service history API handler.
 
 - `ServiceHistoryController` (class) — Controller layer for the Vehicle Service History module. Maps incoming HTTP requests to the business service layer.
-- `getVehicleServiceHistory` — Handles GET /api/v1/vehicles/:vehicleId/service-history
 
 ### `src/server/modules/service-history/service-history.repository.js` (168 lines)
 
@@ -1278,7 +1216,7 @@ Builds a car's full service history with totals.
 - `getVehicleServiceHistory` — Generates the complete maintenance history timeline for a single vehicle.
 - `createServiceHistoryService` — Service instantiation helper
 
-### `src/server/modules/settings/company-settings.js` (199 lines)
+### `src/server/modules/settings/company-settings.js` (194 lines)
 
 Company details printed on bills (name, address, phones, GSTIN, state and terms), GST state codes and GSTIN checks.
 
@@ -1291,18 +1229,16 @@ Company details printed on bills (name, address, phones, GSTIN, state and terms)
 - `stateCodeFor` — State code for.
 - `createCompanySettingsRouter` — Create company settings router.
 
-### `src/server/modules/staff-pay/staff-pay.routes.js` (40 lines)
+### `src/server/modules/staff-pay/staff-pay.routes.js` (34 lines)
 
 Staff & Salary routes.
 
 - `createStaffPayRouter` — Create staff pay router.
-- `handle` — Handle.
 
 ### `src/server/modules/staff-pay/staff-pay.service.js` (187 lines)
 
 Monthly salary, advances and salary payment with advance recovery, posted to the accounts.
 
-- `roundMoney` — Round money.
 - `fail` — Fail.
 - `StaffPayService` (class) — Staff salary and advances in plain terms. Advances are money the staff member owes back (an asset); a salary payment books the full salary as an expense, recovers any advance deducted, and pays the re
 - `summary` — Each staff member's salary, advance due and whether this month is paid.
@@ -1313,18 +1249,11 @@ Monthly salary, advances and salary payment with advance recovery, posted to the
 - `insertPayment` — Insert payment.
 - `payment` — Payment.
 
-### `src/server/modules/technicians/technician.controller.js` (76 lines)
+### `src/server/modules/technicians/technician.controller.js` (36 lines)
 
 Mechanics API handlers.
 
 - `TechnicianController` (class) — Technician controller.
-- `list` — List.
-- `get` — Get.
-- `create` — Create.
-- `update` — Update.
-- `deactivate` — Deactivate.
-- `assignToJobCard` — Assign to job card.
-- `getHistory` — Get history.
 
 ### `src/server/modules/technicians/technician.repository.js` (327 lines)
 
@@ -1349,12 +1278,10 @@ Mechanics routes.
 
 - `createTechnicianRouter` — Create technician router.
 
-### `src/server/modules/technicians/technician.service.js` (343 lines)
+### `src/server/modules/technicians/technician.service.js` (321 lines)
 
 Adds, edits, switches off and assigns mechanics; history and job counts.
 
-- `required` — Required.
-- `parseListQuery` — Parse list query.
 - `normalizeDatabaseError` — Normalize database error.
 - `TechnicianService` (class) — Technician service.
 - `create` — Creates a new technician
@@ -1366,18 +1293,11 @@ Adds, edits, switches off and assigns mechanics; history and job counts.
 - `getHistoryAndMetrics` — Retrieves technician service history and metrics
 - `createTechnicianService` — Create technician service.
 
-### `src/server/modules/warranties/warranty.controller.js` (85 lines)
+### `src/server/modules/warranties/warranty.controller.js` (57 lines)
 
 Warranty API handlers.
 
 - `WarrantyController` (class) — Warranty controller.
-- `registerWarranty` — Register warranty.
-- `fileClaim` — File claim.
-- `settleClaim` — Settle claim.
-- `rejectClaim` — Reject claim.
-- `getWarrantyRegistrationById` — Get warranty registration by id.
-- `listWarrantyRegistrations` — List warranty registrations.
-- `listWarrantyClaims` — List warranty claims.
 
 ### `src/server/modules/warranties/warranty.repository.js` (208 lines)
 
@@ -1400,7 +1320,7 @@ Warranty routes.
 
 - `createWarrantyRouter` — Create warranty router.
 
-### `src/server/modules/warranties/warranty.service.js` (265 lines)
+### `src/server/modules/warranties/warranty.service.js` (262 lines)
 
 Registers warranties for parts sold, files claims, settles them (replacement or refund) or rejects them.
 
@@ -1431,12 +1351,11 @@ Queries for open jobs, estimates, approvals, delivery dates and mechanic time.
 - `stopTimer` — Stop timer.
 - `decide` — Decide.
 
-### `src/server/modules/workshop/workshop.routes.js` (59 lines)
+### `src/server/modules/workshop/workshop.routes.js` (53 lines)
 
 Workshop queue routes.
 
 - `createWorkshopRouter` — Create workshop router.
-- `handle` — Handle.
 
 ### `src/server/modules/workshop/workshop.service.js` (146 lines)
 
@@ -1477,7 +1396,7 @@ The single HTML page that loads the React app.
 
 Starts React with the shared query client.
 
-### `src/renderer/modules/accounting/AccountingPortal.jsx` (497 lines)
+### `src/renderer/modules/accounting/AccountingPortal.jsx` (477 lines)
 
 Accounts (Ledger): trial balance, profit and loss, day book and manual vouchers.
 
@@ -1487,11 +1406,10 @@ Accounts (Ledger): trial balance, profit and loss, day book and manual vouchers.
 - `handleEntryChange` — Handle entry change.
 - `handleSubmitVoucher` — Handle submit voucher.
 
-### `src/renderer/modules/accounting/MoneyInOut.jsx` (605 lines)
+### `src/renderer/modules/accounting/MoneyInOut.jsx` (604 lines)
 
 Money In / Out: balances, banks, plain money in/out choices, refunds, last entries with cancel, starting balances.
 
-- `rupees` — Rupees.
 - `AccountSelect` — Account select.
 - `MoneyForm` — Money form.
 - `set` — Set.
@@ -1504,7 +1422,6 @@ Money In / Out: balances, banks, plain money in/out choices, refunds, last entri
 
 Dues & Daily Cash: who owes money and the cash count.
 
-- `money` — Money.
 - `Table` — Table.
 - `WorkshopFinance` — Workshop finance.
 
@@ -1526,7 +1443,6 @@ First-run administrator setup, sign in and forgot password.
 
 Bills: list with paid/unpaid, the printable tax invoice, cancel a bill.
 
-- `money` — Money.
 - `billState` — What the owner needs from a bill at a glance: is it paid?
 - `InvoiceManager` — Invoice manager.
 
@@ -1534,7 +1450,6 @@ Bills: list with paid/unpaid, the printable tax invoice, cancel a bill.
 
 Tax breakdown table (CGST/SGST or IGST per rate) on bills.
 
-- `money` — Money.
 - `InvoiceTaxSummary` — Uses the tax amounts stored on each line, so interstate bills show IGST and discounted lines use their actual taxable value.
 
 ### `src/renderer/modules/billing/amount-in-words.js` (42 lines)
@@ -1544,17 +1459,13 @@ Indian amount in words (lakh, crore, paise) for bills.
 - `words` — Words.
 - `amountInWords` — Amount in words.
 
-### `src/renderer/modules/customers/CustomerManager.jsx` (493 lines)
+### `src/renderer/modules/customers/CustomerManager.jsx` (33 lines)
 
 Customers: search, add, edit, delete.
 
 - `CustomerManager` — Customer manager.
-- `resetForm` — Reset form.
-- `handleOpenEdit` — Handle open edit.
-- `handleSave` — Handle save.
-- `handleDelete` — Handle delete.
 
-### `src/renderer/modules/dashboard/SalesDashboardContainer.jsx` (308 lines)
+### `src/renderer/modules/dashboard/SalesDashboardContainer.jsx` (298 lines)
 
 Home: today at the workshop, shortcuts, key numbers, needs attention, best customers, latest bills.
 
@@ -1579,19 +1490,19 @@ One number card on Home.
 
 - `KpiCard` — Reusable KPI Card Component. Supports skeleton loading states to prevent layout shifts.
 
-### `src/renderer/modules/dashboard/components/RecentSalesTable.jsx` (177 lines)
+### `src/renderer/modules/dashboard/components/RecentSalesTable.jsx` (169 lines)
 
 Latest bills table on Home.
 
 - `RecentSalesTable` — Recent Sales Table Component. Employs TanStack Table v8 for client-side sorting and column management.
 
-### `src/renderer/modules/dashboard/components/TopCustomersCard.jsx` (131 lines)
+### `src/renderer/modules/dashboard/components/TopCustomersCard.jsx` (125 lines)
 
 Best customers chart on Home.
 
 - `TopCustomersCard` — Top Customers Card Component. Visualizes customer revenue, cost, and profit breakdowns in a horizontal bar chart.
 
-### `src/renderer/modules/dashboard/components/TopServicesCard.jsx` (146 lines)
+### `src/renderer/modules/dashboard/components/TopServicesCard.jsx` (140 lines)
 
 Most common jobs chart on Home.
 
@@ -1667,7 +1578,7 @@ Stock screen tabs.
 
 - `InventoryManager` — Inventory manager.
 
-### `src/renderer/modules/inventory/InventoryReports.jsx` (151 lines)
+### `src/renderer/modules/inventory/InventoryReports.jsx` (138 lines)
 
 Stock reports: summary, valuation, low stock, movements.
 
@@ -1690,7 +1601,7 @@ Stock count: count, approve or reject, history.
 - `decide` — Decide.
 - `VerificationHistory` — Verification history.
 
-### `src/renderer/modules/inventory/inventory-ui.jsx` (179 lines)
+### `src/renderer/modules/inventory/inventory-ui.jsx` (178 lines)
 
 Shared stock screen parts: fields, selectors, plain column names, list with paging.
 
@@ -1703,11 +1614,10 @@ Shared stock screen parts: fields, selectors, plain column names, list with pagi
 - `useInventoryMutation` — Use inventory mutation.
 - `Register` — Register.
 
-### `src/renderer/modules/job-cards/JobCardCharges.jsx` (92 lines)
+### `src/renderer/modules/job-cards/JobCardCharges.jsx` (94 lines)
 
 Parts, lubricants, labour and outside jobs on a job card, with the running total.
 
-- `money` — Money.
 - `JobCardCharges` — Job card charges.
 - `lineTotal` — Line total.
 
@@ -1717,7 +1627,7 @@ New job card form: customer, car, complaint, things in the car, mechanic.
 
 - `JobCardIntake` — Job card intake.
 
-### `src/renderer/modules/job-cards/JobCardManager.jsx` (1008 lines)
+### `src/renderer/modules/job-cards/JobCardManager.jsx` (955 lines)
 
 Job Cards: list, detail, add parts and labour, make the bill with payment, print, cancel.
 
@@ -1784,7 +1694,6 @@ Buy Stock: supplier bills and optional orders.
 
 GSTR-3B and HSN/SAC detail tables.
 
-- `money` — Money.
 - `GstDetailReports` — Gst detail reports.
 - `dataset` — Dataset.
 
@@ -1806,7 +1715,7 @@ Reports & GST: tax summary, Tally file, trial balance, P&L, balance sheet, print
 - `handleExportTally` — Handle export tally.
 - `handlePrint` — Handle print.
 
-### `src/renderer/modules/returns/ReturnsManager.jsx` (506 lines)
+### `src/renderer/modules/returns/ReturnsManager.jsx` (486 lines)
 
 Returns: customer and supplier returns, approve or cancel drafts.
 
@@ -1820,11 +1729,10 @@ Send parts back to a supplier from a supplier bill.
 
 - `SupplierReturnForm` — Send parts back to a supplier: choose the supplier bill they came on, the item and how many. Saved as a draft; approving it takes the stock out and lowers what you owe that supplier.
 
-### `src/renderer/modules/sales/CounterSale.jsx` (524 lines)
+### `src/renderer/modules/sales/CounterSale.jsx` (519 lines)
 
 Counter Sale: sell parts without a job card, payment, print and cancel.
 
-- `money` — Counter sale: sell parts or oil over the counter without a job card. Creates a GST bill (CS/26-27/0001), takes the stock out and, when paid now, records the payment against this bill.
 - `emptyLine` — Empty line.
 - `SaleLine` — Sale line.
 - `pick` — Pick.
@@ -1860,12 +1768,11 @@ Settings & Backup: company, back up now, restore, USB folder, schedule.
 
 - `SettingsPortal` — Settings portal.
 
-### `src/renderer/modules/staff/StaffPay.jsx` (270 lines)
+### `src/renderer/modules/staff/StaffPay.jsx` (265 lines)
 
 Staff & Salary: monthly salary, advances, pay salary.
 
 - `monthName` — Month name.
-- `rupees` — Rupees.
 - `PayForm` — Pay form.
 - `set` — Set.
 - `SalaryInput` — Salary input.
@@ -1877,34 +1784,33 @@ Supplier Ledger: bills, payments, returns and amount still owed.
 
 - `SupplierLedger` — Supplier ledger.
 
-### `src/renderer/modules/suppliers/SupplierManager.jsx` (465 lines)
+### `src/renderer/modules/suppliers/SupplierManager.jsx` (26 lines)
 
 Suppliers: search, add, edit, delete.
 
 - `SupplierManager` — Supplier manager.
-- `resetForm` — Reset form.
-- `handleOpenEdit` — Handle open edit.
-- `handleSave` — Handle save.
-- `handleDelete` — Handle delete.
 
 ### `src/renderer/modules/vehicles/ServiceHistory.jsx` (118 lines)
 
 Service History: everything done on a car.
 
-- `money` — Money.
 - `ServiceHistory` — Service history.
 
-### `src/renderer/modules/vehicles/VehicleManager.jsx` (542 lines)
+### `src/renderer/modules/vehicles/VehicleManager.jsx` (292 lines)
 
 Vehicles: search by number or owner, add, edit, delete.
 
-- `VehicleManager` — Vehicle manager.
-- `resetForm` — Reset form.
-- `handleOpenEdit` — Handle open edit.
+- `blank` — Blank.
+- `VehicleManager` — Every car with its owner; add, edit or delete one.
+- `set` — Set.
+- `after` — After.
+- `open` — Open.
 - `handleSave` — Handle save.
-- `handleDelete` — Handle delete.
+- `orNull` — Or null.
+- `numberOrNull` — Number or null.
+- `field` — Field.
 
-### `src/renderer/modules/warranties/WarrantyManager.jsx` (486 lines)
+### `src/renderer/modules/warranties/WarrantyManager.jsx` (446 lines)
 
 Warranties: registrations, file, settle or reject claims.
 
@@ -1977,6 +1883,16 @@ Sortable table with paging and empty/error states.
 - `DataTable` — Data table.
 - `handlePageSizeChange` — Handle page size change.
 
+### `src/renderer/shared/components/FormParts.jsx` (107 lines)
+
+Shared form pieces: labelled text field, pop-up frame, Cancel/Save buttons, Edit/Delete row buttons.
+
+- `TextField` — Labelled text input used by the record forms (customers, suppliers, vehicles).
+- `names` (class) — Names.
+- `Modal` — Centered pop-up with a title row and a close button.
+- `FormButtons` — Cancel and Save buttons at the bottom of a record form.
+- `RowActions` — Edit and Delete icon buttons for a table row.
+
 ### `src/renderer/shared/components/Layout.jsx` (430 lines)
 
 Menu, More tools, Find a screen (Ctrl+P), F-key shortcuts, notices and confirm dialogs.
@@ -1985,16 +1901,29 @@ Menu, More tools, Find a screen (Ctrl+P), F-key shortcuts, notices and confirm d
 - `toggleMore` — Toggle more.
 - `handleKeyDown` — Handle key down.
 
-### `src/renderer/shared/components/MoneyWarning.jsx` (82 lines)
+### `src/renderer/shared/components/MoneyWarning.jsx` (85 lines)
 
 Cash and bank balances hook, the "will go below zero" note under payment forms and the red Home warning.
 
-- `rupees` — Rupees.
 - `accountName` — Account name.
 - `useMoneyAccounts` — Cash and bank accounts with their balances (shared cache key 'money-accounts').
+- `bankAccounts` — Only the bank accounts (for "which bank paid?" choices).
 - `payingAccount` — Which account a payment comes out of: cash, the chosen bank, or the only bank when there is just one.
 - `BelowZeroNote` — A plain note under a payment form when paying would take cash or a bank below zero. It does not stop the save: usually money that came in was not entered yet.
 - `NegativeMoneyBanner` — Home screen warning when cash or a bank already shows less than zero.
+
+### `src/renderer/shared/components/PartyScreen.jsx` (215 lines)
+
+One list-and-form screen for customers and suppliers (search, add, edit, delete), set up by a small config.
+
+- `PartyScreen` — List, search, add, edit and delete screen for people the workshop deals with (customers, suppliers). `config` gives the words, the API path and any extra field such as a credit limit.
+- `blank` — Blank.
+- `set` — Set.
+- `after` — After.
+- `failed` — Failed.
+- `open` — Open.
+- `handleSave` — Handle save.
+- `field` — Field.
 
 ### `src/renderer/shared/components/RemoteSelect.jsx` (104 lines)
 
@@ -2007,6 +1936,14 @@ Search-as-you-type dropdown for customers, items, suppliers and more.
 Previous/next page buttons.
 
 - `ServerPagination` — Server pagination.
+
+### `src/renderer/shared/format.js` (17 lines)
+
+Money formatting for all screens: rupees (Indian grouping), whole rupees, and plain Rs. with two decimals.
+
+- `rupees` — ₹1,23,456.50
+- `rupeesWhole` — ₹1,23,457 (Home screen totals)
+- `money` — ₹123456.50, as printed on bills and in tables
 
 ### `src/renderer/shared/hooks/use-permissions.js` (24 lines)
 
@@ -2071,7 +2008,7 @@ Fills the printable job card from the API and prints or saves it as PDF.
 
 ## Scripts
 
-### `scripts/benchmark.js` (307 lines)
+### `scripts/benchmark.js` (235 lines)
 
 Speed test with a large synthetic database.
 
@@ -2085,7 +2022,7 @@ Refuses to let data, backups, .env files or secret keys into the public reposito
 - `scanRepository` — Scan repository.
 - `git` — Git.
 
-### `scripts/desktop-smoke.js` (90 lines)
+### `scripts/desktop-smoke.js` (92 lines)
 
 Runs the desktop smoke test in Electron with disposable data.
 
@@ -2095,7 +2032,7 @@ Runs the desktop smoke test in Electron with disposable data.
 
 Hand-written descriptions of core business functions used in docs/file-reference.md.
 
-### `scripts/generate-file-reference.js` (546 lines)
+### `scripts/generate-file-reference.js` (566 lines)
 
 Writes docs/file-reference.md (this list).
 

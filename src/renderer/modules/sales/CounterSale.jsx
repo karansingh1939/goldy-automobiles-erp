@@ -7,13 +7,14 @@ import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import { localDate } from '../../../../public/local-date.js';
 import InvoiceTaxSummary from '../billing/InvoiceTaxSummary.jsx';
 import { amountInWords } from '../billing/amount-in-words.js';
+import { money } from '../../shared/format.js';
+import { bankAccounts, useMoneyAccounts } from '../../shared/components/MoneyWarning.jsx';
 
 /**
  * Counter sale: sell parts or oil over the counter without a job card.
  * Creates a GST bill (CS/26-27/0001), takes the stock out and, when paid now,
  * records the payment against this bill.
  */
-const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
 const input =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-base dark:border-gray-700 dark:bg-gray-800';
 const STATUS = {
@@ -122,13 +123,7 @@ function NewSale({ onDone }) {
   const [lines, setLines] = useState([emptyLine()]);
   const [payMode, setPayMode] = useState('CASH');
   const [bankId, setBankId] = useState('');
-  const accounts = useQuery({
-    queryKey: ['money-accounts'],
-    queryFn: () => api.get('/api/v1/accounting/money-accounts'),
-  });
-  const banks = (Array.isArray(accounts.data?.data) ? accounts.data.data : []).filter(
-    (row) => row.kind === 'BANK',
-  );
+  const banks = bankAccounts(useMoneyAccounts());
   const update = (key, patch) =>
     setLines((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
   const total = lines.reduce((sum, line) => {

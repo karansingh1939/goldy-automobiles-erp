@@ -5,13 +5,7 @@ import {
   getSortedRowModel,
   flexRender,
 } from '@tanstack/react-table';
-
-const inrFormatter = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { rupees } from '../../../shared/format.js';
 
 /**
  * Recent Sales Table Component.
@@ -64,9 +58,7 @@ export function RecentSalesTable({ sales, isLoading }) {
         accessorKey: 'grandTotal',
         header: 'Grand Total',
         cell: (info) => (
-          <span className="font-bold text-gray-900">
-            {inrFormatter.format(info.getValue() || 0)}
-          </span>
+          <span className="font-bold text-gray-900">{rupees(info.getValue() || 0)}</span>
         ),
       },
     ],

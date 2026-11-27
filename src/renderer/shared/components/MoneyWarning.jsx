@@ -2,20 +2,23 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
 import { api } from '../api/api-client.js';
+import { rupees } from '../format.js';
 
-const rupees = (value) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(value || 0));
 const accountName = (account) => (account.kind === 'CASH' ? 'Cash' : account.name);
 
 /** Cash and bank accounts with their balances (shared cache key 'money-accounts'). */
-export function useMoneyAccounts() {
+export function useMoneyAccounts({ enabled = true } = {}) {
   const query = useQuery({
     queryKey: ['money-accounts'],
     queryFn: () => api.get('/api/v1/accounting/money-accounts'),
     retry: false,
+    enabled,
   });
   return Array.isArray(query.data?.data) ? query.data.data : [];
 }
+
+/** Only the bank accounts (for "which bank paid?" choices). */
+export const bankAccounts = (accounts) => accounts.filter((account) => account.kind === 'BANK');
 
 /**
  * Which account a payment comes out of: cash, the chosen bank, or the only

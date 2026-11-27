@@ -7,7 +7,7 @@ import { api } from '../../shared/api/api-client.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
-const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
+import { money } from '../../shared/format.js';
 // What the owner needs from a bill at a glance: is it paid?
 function billState(row) {
   if (row.status === 'CANCELLED')

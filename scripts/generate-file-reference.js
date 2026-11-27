@@ -393,6 +393,26 @@ const PURPOSE = {
     'Sortable table with paging and empty/error states.',
   'src/renderer/shared/components/Layout.jsx':
     'Menu, More tools, Find a screen (Ctrl+P), F-key shortcuts, notices and confirm dialogs.',
+  'src/renderer/shared/components/FormParts.jsx':
+    'Shared form pieces: labelled text field, pop-up frame, Cancel/Save buttons, Edit/Delete row buttons.',
+  'src/renderer/shared/components/PartyScreen.jsx':
+    'One list-and-form screen for customers and suppliers (search, add, edit, delete), set up by a small config.',
+  'src/renderer/shared/format.js':
+    'Money formatting for all screens: rupees (Indian grouping), whole rupees, and plain Rs. with two decimals.',
+  'src/server/modules/accounting/ledgers.js':
+    'Creating ledgers in one place: system accounts made on first use, and picking the cash or bank ledger for a payment.',
+  'src/server/modules/job-cards/intake-lookup.service.js':
+    'New job card lookups: returning customer by phone, known vehicle by registration with its service summary; phone and registration clean-up.',
+  'src/server/shared/errors/database-error.js':
+    'Turns SQLite constraint failures into plain messages (duplicate, missing related record, in use).',
+  'src/server/shared/http/respond.js':
+    'Express handler wrappers that send the result as JSON and pass any error to the error handler.',
+  'src/server/shared/utils/numbers.js':
+    'toNumber and roundMoney (rupees to paise), shared by every service.',
+  'src/server/shared/utils/report-period.js':
+    'Report date range from a named period (today, this month, this year) or from/to dates.',
+  'src/server/shared/utils/validation.js':
+    'Required fields, page and page size, YYYY-MM-DD dates, pagination block and WHERE clauses from optional filters.',
   'src/renderer/shared/components/MoneyWarning.jsx':
     'Cash and bank balances hook, the "will go below zero" note under payment forms and the red Home warning.',
   'src/renderer/shared/components/RemoteSelect.jsx':

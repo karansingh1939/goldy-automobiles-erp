@@ -1,5 +1,5 @@
 import React from 'react';
-const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
+import { money } from '../../shared/format.js';
 
 // Uses the tax amounts stored on each line, so interstate bills show IGST and
 // discounted lines use their actual taxable value.

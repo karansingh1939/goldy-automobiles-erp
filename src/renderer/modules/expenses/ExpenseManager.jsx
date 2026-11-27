@@ -6,7 +6,12 @@ import { useAppStore } from '../../shared/store/use-app-store.js';
 import DataTable from '../../shared/components/DataTable.jsx';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
 import { localDate } from '../../../../public/local-date.js';
-import { BelowZeroNote, payingAccount } from '../../shared/components/MoneyWarning.jsx';
+import {
+  BelowZeroNote,
+  bankAccounts,
+  payingAccount,
+  useMoneyAccounts,
+} from '../../shared/components/MoneyWarning.jsx';
 import {
   decodeExpenseDescription,
   encodeExpenseDescription,
@@ -40,13 +45,8 @@ export default function ExpenseManager() {
   const [dates, setDates] = useState({ dateFrom: '', dateTo: '' });
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(empty);
-  const moneyAccounts = useQuery({
-    queryKey: ['money-accounts'],
-    queryFn: () => api.get('/api/v1/accounting/money-accounts'),
-  });
-  const banks = (Array.isArray(moneyAccounts.data?.data) ? moneyAccounts.data.data : []).filter(
-    (account) => account.kind === 'BANK',
-  );
+  const accounts = useMoneyAccounts();
+  const banks = bankAccounts(accounts);
   const invalidDates = dates.dateFrom && dates.dateTo && dates.dateFrom > dates.dateTo;
   const params = new URLSearchParams({ category, ...dates });
   const enabled = hasPermission('expenses.read') && !invalidDates;
@@ -263,7 +263,7 @@ export default function ExpenseManager() {
               <BelowZeroNote
                 className="md:col-span-2"
                 amount={form.amount}
-                account={payingAccount(moneyAccounts.data?.data || [], {
+                account={payingAccount(accounts, {
                   cash: form.payment_mode === 'CASH',
                   bankId: form.payment_account_id,
                 })}

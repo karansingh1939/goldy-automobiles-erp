@@ -44,3 +44,16 @@ export function optionalDate(value, label) {
     throw new AppError(`${label} must be a valid YYYY-MM-DD date.`, 400, 'VALIDATION_ERROR');
   return date;
 }
+
+/**
+ * WHERE clause from [condition, value] pairs, keeping only the filters that
+ * were given, with positional parameters: sqlWhere([['a = ?', 1], ['b = ?', '']])
+ * gives { sql: 'WHERE a = ?', params: [1] }.
+ */
+export function sqlWhere(conditions) {
+  const used = conditions.filter(([, value]) => hasValue(value));
+  return {
+    sql: used.length ? `WHERE ${used.map(([condition]) => condition).join(' AND ')}` : '',
+    params: used.map(([, value]) => value),
+  };
+}

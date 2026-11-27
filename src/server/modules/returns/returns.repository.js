@@ -1,4 +1,5 @@
 import { AppError } from '../../shared/errors/app-error.js';
+import { sqlWhere } from '../../shared/utils/validation.js';
 
 export class ReturnsRepository {
   constructor(db) {
@@ -114,31 +115,14 @@ export class ReturnsRepository {
   }
 
   listCustomerReturns({ companyId, customerId, invoiceId, status, dateFrom, dateTo }) {
-    const clauses = ['r.company_id = ?'];
-    const params = [companyId];
-
-    if (customerId) {
-      clauses.push('r.customer_id = ?');
-      params.push(customerId);
-    }
-    if (invoiceId) {
-      clauses.push('r.invoice_id = ?');
-      params.push(invoiceId);
-    }
-    if (status) {
-      clauses.push('r.status = ?');
-      params.push(status);
-    }
-    if (dateFrom) {
-      clauses.push('DATE(r.return_date) >= DATE(?)');
-      params.push(dateFrom);
-    }
-    if (dateTo) {
-      clauses.push('DATE(r.return_date) <= DATE(?)');
-      params.push(dateTo);
-    }
-
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const { sql: where, params } = sqlWhere([
+      ['r.company_id = ?', companyId],
+      ['r.customer_id = ?', customerId],
+      ['r.invoice_id = ?', invoiceId],
+      ['r.status = ?', status],
+      ['DATE(r.return_date) >= DATE(?)', dateFrom],
+      ['DATE(r.return_date) <= DATE(?)', dateTo],
+    ]);
     return this.db
       .prepare(
         `
@@ -302,31 +286,14 @@ export class ReturnsRepository {
   }
 
   listSupplierReturns({ companyId, supplierId, purchaseId, status, dateFrom, dateTo }) {
-    const clauses = ['r.company_id = ?'];
-    const params = [companyId];
-
-    if (supplierId) {
-      clauses.push('r.supplier_id = ?');
-      params.push(supplierId);
-    }
-    if (purchaseId) {
-      clauses.push('r.purchase_id = ?');
-      params.push(purchaseId);
-    }
-    if (status) {
-      clauses.push('r.status = ?');
-      params.push(status);
-    }
-    if (dateFrom) {
-      clauses.push('DATE(r.return_date) >= DATE(?)');
-      params.push(dateFrom);
-    }
-    if (dateTo) {
-      clauses.push('DATE(r.return_date) <= DATE(?)');
-      params.push(dateTo);
-    }
-
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const { sql: where, params } = sqlWhere([
+      ['r.company_id = ?', companyId],
+      ['r.supplier_id = ?', supplierId],
+      ['r.purchase_id = ?', purchaseId],
+      ['r.status = ?', status],
+      ['DATE(r.return_date) >= DATE(?)', dateFrom],
+      ['DATE(r.return_date) <= DATE(?)', dateTo],
+    ]);
     return this.db
       .prepare(
         `

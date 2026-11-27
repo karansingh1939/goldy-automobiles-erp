@@ -1,5 +1,12 @@
 # Release Notes - GOLDY AUTOMOBILE ERP
 
+## Unreleased — code simplification, 28 November 2026
+
+- About 3,000 fewer lines: shared helpers replace copied code (rounding, paging, dates, report periods, ledgers, response handling); Customers and Suppliers share one screen; shared form parts and money formatting on the screens.
+- Fixed: registering a car without an odometer reading; LIFO error on Stock valuation (the report now uses weighted average only, like the accounts); next-service date, warranty month ends, log file names and stock "as of" dates now follow the laptop's calendar; benchmark script repaired.
+- Removed: unused payment list and ledger repair endpoints, old web page redirects, unused permissions and fields.
+- Same behaviour and speed as before (benchmark compared with the previous version). Details: [code simplification review](reviews/code-simplification-2026-11-28.md).
+
 ## Unreleased — open items closed, 27 November 2026
 
 - Fixed assets: only name, date and price needed (code made automatically); "Paid from" cash, bank or bought earlier now updates Cash/Bank and a Workshop Equipment account on the Balance Sheet; Cancel button. Migration 049.

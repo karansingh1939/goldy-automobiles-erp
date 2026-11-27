@@ -1,4 +1,5 @@
-function whereClause(filters) {
+/** WHERE clause for expense filters (category, date range), with named parameters. */
+export function whereClause(filters = {}) {
   const clauses = [];
   const params = {};
 

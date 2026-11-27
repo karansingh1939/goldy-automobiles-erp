@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import { Plus, BookOpen, X } from 'lucide-react';
+import { FormButtons, Modal } from '../../shared/components/FormParts.jsx';
 
 export default function AccountingPortal() {
   const queryClient = useQueryClient();
@@ -333,163 +334,142 @@ export default function AccountingPortal() {
 
       {/* Add Voucher Modal */}
       {showAddVoucher && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <div className="flex items-center gap-2 text-brand-600 dark:text-brand-400">
-                <BookOpen className="h-5 w-5" />
-                <h3 className="text-lg font-bold">Post Double-Entry Voucher</h3>
+        <Modal
+          title={'Post Double-Entry Voucher'}
+          icon={BookOpen}
+          onClose={() => setShowAddVoucher(false)}
+          size="2xl"
+        >
+          <form
+            onSubmit={handleSubmitVoucher}
+            className="p-6 space-y-4 max-h-[75vh] overflow-y-auto"
+          >
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="modal-v-type"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Voucher Type *
+                </label>
+                <select
+                  id="modal-v-type"
+                  value={voucherType}
+                  onChange={(e) => setVoucherType(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                >
+                  <option value="Journal">Journal Voucher</option>
+                  <option value="Payment">Payment</option>
+                  <option value="Receipt">Receipt</option>
+                  <option value="Contra">Contra</option>
+                </select>
               </div>
-              <button
-                onClick={() => setShowAddVoucher(false)}
-                className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div>
+                <label
+                  htmlFor="modal-v-date"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Voucher Date *
+                </label>
+                <input
+                  id="modal-v-date"
+                  type="date"
+                  required
+                  value={voucherDate}
+                  onChange={(e) => setVoucherDate(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                />
+              </div>
+              <div className="col-span-2">
+                <label
+                  htmlFor="modal-v-narration"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Narration / Note
+                </label>
+                <input
+                  id="modal-v-narration"
+                  type="text"
+                  value={narration}
+                  onChange={(e) => setNarration(e.target.value)}
+                  placeholder="General description of transactions..."
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                />
+              </div>
             </div>
 
-            <form
-              onSubmit={handleSubmitVoucher}
-              className="p-6 space-y-4 max-h-[75vh] overflow-y-auto"
-            >
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="modal-v-type"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Voucher Type *
-                  </label>
-                  <select
-                    id="modal-v-type"
-                    value={voucherType}
-                    onChange={(e) => setVoucherType(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  >
-                    <option value="Journal">Journal Voucher</option>
-                    <option value="Payment">Payment</option>
-                    <option value="Receipt">Receipt</option>
-                    <option value="Contra">Contra</option>
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="modal-v-date"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Voucher Date *
-                  </label>
-                  <input
-                    id="modal-v-date"
-                    type="date"
-                    required
-                    value={voucherDate}
-                    onChange={(e) => setVoucherDate(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label
-                    htmlFor="modal-v-narration"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Narration / Note
-                  </label>
-                  <input
-                    id="modal-v-narration"
-                    type="text"
-                    value={narration}
-                    onChange={(e) => setNarration(e.target.value)}
-                    placeholder="General description of transactions..."
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Entries lines */}
-              <div className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-gray-500">Journal Entries</h4>
-                  <button
-                    type="button"
-                    onClick={handleAddEntryLine}
-                    className="text-xs text-brand-600 dark:text-brand-400 font-semibold hover:underline"
-                  >
-                    + Add Account Line
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {entries.map((entry, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center gap-3 bg-gray-50 dark:bg-gray-850 p-3 rounded-lg border border-gray-200 dark:border-gray-800/80 animate-fade-in"
-                    >
-                      <select
-                        required
-                        value={entry.ledgerId}
-                        onChange={(e) => handleEntryChange(index, 'ledgerId', e.target.value)}
-                        className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white"
-                      >
-                        <option value="">Select Ledger Account...</option>
-                        {ledgers.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.name}
-                          </option>
-                        ))}
-                      </select>
-
-                      <select
-                        value={entry.type}
-                        onChange={(e) => handleEntryChange(index, 'type', e.target.value)}
-                        className="w-24 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white"
-                      >
-                        <option value="DEBIT">DEBIT (Dr)</option>
-                        <option value="CREDIT">CREDIT (Cr)</option>
-                      </select>
-
-                      <input
-                        type="number"
-                        required
-                        value={entry.amount}
-                        onChange={(e) => handleEntryChange(index, 'amount', e.target.value)}
-                        placeholder="₹0.00"
-                        className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white text-right"
-                      />
-
-                      {entries.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveEntryLine(index)}
-                          className="p-1.5 text-gray-400 hover:text-red-500 rounded"
-                        >
-                          <X className="h-4.5 w-4.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
+            {/* Entries lines */}
+            <div className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-800">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-gray-500">Journal Entries</h4>
                 <button
                   type="button"
-                  onClick={() => setShowAddVoucher(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+                  onClick={handleAddEntryLine}
+                  className="text-xs text-brand-600 dark:text-brand-400 font-semibold hover:underline"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createVoucherMutation.isPending}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Post Voucher
+                  + Add Account Line
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
+
+              <div className="space-y-2">
+                {entries.map((entry, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-3 bg-gray-50 dark:bg-gray-850 p-3 rounded-lg border border-gray-200 dark:border-gray-800/80 animate-fade-in"
+                  >
+                    <select
+                      required
+                      value={entry.ledgerId}
+                      onChange={(e) => handleEntryChange(index, 'ledgerId', e.target.value)}
+                      className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white"
+                    >
+                      <option value="">Select Ledger Account...</option>
+                      {ledgers.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={entry.type}
+                      onChange={(e) => handleEntryChange(index, 'type', e.target.value)}
+                      className="w-24 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white"
+                    >
+                      <option value="DEBIT">DEBIT (Dr)</option>
+                      <option value="CREDIT">CREDIT (Cr)</option>
+                    </select>
+
+                    <input
+                      type="number"
+                      required
+                      value={entry.amount}
+                      onChange={(e) => handleEntryChange(index, 'amount', e.target.value)}
+                      placeholder="₹0.00"
+                      className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 text-xs focus-ring text-gray-950 dark:text-white text-right"
+                    />
+
+                    {entries.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveEntryLine(index)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 rounded"
+                      >
+                        <X className="h-4.5 w-4.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <FormButtons
+              onCancel={() => setShowAddVoucher(false)}
+              saving={createVoucherMutation.isPending}
+              saveLabel="Post Voucher"
+            />
+          </form>
+        </Modal>
       )}
     </div>
   );

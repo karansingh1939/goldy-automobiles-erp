@@ -3,8 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import DataTable from '../../shared/components/DataTable.jsx';
 import { downloadCsv } from '../../shared/utils/export-csv.js';
+import { money } from '../../shared/format.js';
 
-const money = (value) => `₹${Number(value || 0).toFixed(2)}`;
 const taxColumns = [
   ['gstRate', 'GST rate (%)'],
   ['taxableValue', 'Taxable value'],

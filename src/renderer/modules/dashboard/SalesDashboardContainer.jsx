@@ -19,13 +19,7 @@ import {
   ShoppingCart,
   Package,
 } from 'lucide-react';
-
-const inrFormatter = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0,
-});
+import { rupeesWhole } from '../../shared/format.js';
 
 export default function SalesDashboardContainer() {
   const {
@@ -166,7 +160,7 @@ export default function SalesDashboardContainer() {
     alerts.push({
       id: 'receivables',
       severity: 'medium',
-      message: `Customers owe you ${inrFormatter.format(outstandingAmount)} in total.`,
+      message: `Customers owe you ${rupeesWhole(outstandingAmount)} in total.`,
       href: '#/cash-receivables',
       action: 'See dues',
     });
@@ -228,30 +222,26 @@ export default function SalesDashboardContainer() {
       </section>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <KpiCard
-          title="Sales today"
-          value={inrFormatter.format(todayRevenue)}
-          isLoading={overallLoading}
-        />
+        <KpiCard title="Sales today" value={rupeesWhole(todayRevenue)} isLoading={overallLoading} />
         <KpiCard
           title="Sales this month"
-          value={inrFormatter.format(monthlyRevenue)}
+          value={rupeesWhole(monthlyRevenue)}
           isLoading={overallLoading}
         />
         <KpiCard
           title="Profit this month (after expenses)"
-          value={inrFormatter.format(netProfit)}
+          value={rupeesWhole(netProfit)}
           isLoading={overallLoading}
         />
         <KpiCard
           title="Customers owe you"
-          value={inrFormatter.format(outstandingAmount)}
+          value={rupeesWhole(outstandingAmount)}
           isLoading={overallLoading}
         />
         <KpiCard title="Cars in the workshop" value={openJobCards} isLoading={overallLoading} />
         <KpiCard
           title="Stock value"
-          value={inrFormatter.format(totalValuation)}
+          value={rupeesWhole(totalValuation)}
           isLoading={overallLoading}
         />
       </div>

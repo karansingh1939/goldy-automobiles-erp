@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
-import { Search, X } from 'lucide-react';
+import { Search } from 'lucide-react';
+import { FormButtons, Modal } from '../../shared/components/FormParts.jsx';
 
 const STATUS_WORDS = {
   DRAFT: 'Draft',
@@ -304,181 +305,140 @@ export default function WarrantyManager() {
 
       {/* File Claim Modal */}
       {showClaimModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <h3 className="text-base font-bold text-gray-950 dark:text-white">
-                File Warranty Claim
-              </h3>
-              <button
-                onClick={() => setShowClaimModal(false)}
-                className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-850"
-              >
-                <X className="h-4 w-4" />
-              </button>
+        <Modal title={'File Warranty Claim'} onClose={() => setShowClaimModal(false)} size="md">
+          <form onSubmit={handleFileClaim} className="p-6 space-y-4">
+            <div>
+              <p className="text-[10px] text-gray-500 font-semibold uppercase">Item to Claim</p>
+              <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                {selectedReg?.item_name} ({selectedReg?.sku})
+              </p>
             </div>
 
-            <form onSubmit={handleFileClaim} className="p-6 space-y-4">
-              <div>
-                <p className="text-[10px] text-gray-500 font-semibold uppercase">Item to Claim</p>
-                <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                  {selectedReg?.item_name} ({selectedReg?.sku})
-                </p>
-              </div>
+            <div>
+              <label
+                htmlFor="modal-claim-notes"
+                className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+              >
+                Failure description / Notes *
+              </label>
+              <textarea
+                id="modal-claim-notes"
+                required
+                value={claimNotes}
+                onChange={(e) => setClaimNotes(e.target.value)}
+                placeholder="E.g. Alternator failed diagnostic check, low voltage output."
+                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white h-24"
+              />
+            </div>
 
-              <div>
-                <label
-                  htmlFor="modal-claim-notes"
-                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                >
-                  Failure description / Notes *
-                </label>
-                <textarea
-                  id="modal-claim-notes"
-                  required
-                  value={claimNotes}
-                  onChange={(e) => setClaimNotes(e.target.value)}
-                  placeholder="E.g. Alternator failed diagnostic check, low voltage output."
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white h-24"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setShowClaimModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={fileClaimMutation.isPending}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  File Claim
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <FormButtons
+              onCancel={() => setShowClaimModal(false)}
+              saving={fileClaimMutation.isPending}
+              saveLabel="File Claim"
+            />
+          </form>
+        </Modal>
       )}
 
       {/* Settle Claim Modal */}
       {showSettleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <h3 className="text-base font-bold text-gray-950 dark:text-white">
-                Approve & Settle Claim
-              </h3>
-              <button
-                onClick={() => setShowSettleModal(false)}
-                className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-850"
+        <Modal title={'Approve & Settle Claim'} onClose={() => setShowSettleModal(false)} size="md">
+          <form onSubmit={handleSettleClaim} className="p-6 space-y-4">
+            <div>
+              <label
+                htmlFor="modal-settle-select"
+                className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
               >
-                <X className="h-4 w-4" />
-              </button>
+                Settlement Action *
+              </label>
+              <select
+                id="modal-settle-select"
+                value={settlementType}
+                onChange={(e) => setSettlementType(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+              >
+                <option value="REPLACEMENT">Item Replacement</option>
+                <option value="REFUND">Refund (Credit Note)</option>
+                <option value="REPAIR">Repair</option>
+              </select>
             </div>
 
-            <form onSubmit={handleSettleClaim} className="p-6 space-y-4">
-              <div>
-                <label
-                  htmlFor="modal-settle-select"
-                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                >
-                  Settlement Action *
-                </label>
-                <select
-                  id="modal-settle-select"
-                  value={settlementType}
-                  onChange={(e) => setSettlementType(e.target.value)}
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                >
-                  <option value="REPLACEMENT">Item Replacement</option>
-                  <option value="REFUND">Refund (Credit Note)</option>
-                  <option value="REPAIR">Repair</option>
-                </select>
-              </div>
-
-              {settlementType === 'REPLACEMENT' && (
-                <div className="space-y-4 bg-gray-50 dark:bg-gray-850/50 p-4 border border-gray-200 dark:border-gray-800 rounded-xl animate-fade-in">
-                  <div>
-                    <label
-                      htmlFor="modal-settle-warehouse"
-                      className="block text-[10px] font-bold text-gray-500 uppercase"
-                    >
-                      Warehouse Source *
-                    </label>
-                    <select
-                      id="modal-settle-warehouse"
-                      required={settlementType === 'REPLACEMENT'}
-                      value={warehouseId}
-                      onChange={(e) => setWarehouseId(e.target.value)}
-                      className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                    >
-                      <option value="">Choose warehouse...</option>
-                      <option value="1">Karnal Warehouse</option>
-                      <option value="2">Delhi Godown</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="modal-settle-batch"
-                      className="block text-[10px] font-bold text-gray-500 uppercase"
-                    >
-                      Replacement Batch *
-                    </label>
-                    <select
-                      id="modal-settle-batch"
-                      required={settlementType === 'REPLACEMENT'}
-                      value={batchId}
-                      onChange={(e) => setBatchId(e.target.value)}
-                      className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                    >
-                      <option value="">Select batch...</option>
-                      {batches
-                        .filter(
-                          (b) => !warehouseId || Number(b.warehouse_id) === Number(warehouseId),
-                        )
-                        .map((b) => (
-                          <option
-                            key={b.id}
-                            value={b.id}
-                          >{`${b.batch_number} (Qty: ${b.quantity})`}</option>
-                        ))}
-                    </select>
-                  </div>
+            {settlementType === 'REPLACEMENT' && (
+              <div className="space-y-4 bg-gray-50 dark:bg-gray-850/50 p-4 border border-gray-200 dark:border-gray-800 rounded-xl animate-fade-in">
+                <div>
+                  <label
+                    htmlFor="modal-settle-warehouse"
+                    className="block text-[10px] font-bold text-gray-500 uppercase"
+                  >
+                    Warehouse Source *
+                  </label>
+                  <select
+                    id="modal-settle-warehouse"
+                    required={settlementType === 'REPLACEMENT'}
+                    value={warehouseId}
+                    onChange={(e) => setWarehouseId(e.target.value)}
+                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                  >
+                    <option value="">Choose warehouse...</option>
+                    <option value="1">Karnal Warehouse</option>
+                    <option value="2">Delhi Godown</option>
+                  </select>
                 </div>
-              )}
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setShowSettleModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={rejectClaimMutation.isPending}
-                  onClick={() => rejectClaimMutation.mutate()}
-                  className="px-4 py-2 border border-red-300 text-red-700 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50"
-                >
-                  Reject claim
-                </button>
-                <button
-                  type="submit"
-                  disabled={settleClaimMutation.isPending}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Approve Settlement
-                </button>
+                <div>
+                  <label
+                    htmlFor="modal-settle-batch"
+                    className="block text-[10px] font-bold text-gray-500 uppercase"
+                  >
+                    Replacement Batch *
+                  </label>
+                  <select
+                    id="modal-settle-batch"
+                    required={settlementType === 'REPLACEMENT'}
+                    value={batchId}
+                    onChange={(e) => setBatchId(e.target.value)}
+                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                  >
+                    <option value="">Select batch...</option>
+                    {batches
+                      .filter((b) => !warehouseId || Number(b.warehouse_id) === Number(warehouseId))
+                      .map((b) => (
+                        <option
+                          key={b.id}
+                          value={b.id}
+                        >{`${b.batch_number} (Qty: ${b.quantity})`}</option>
+                      ))}
+                  </select>
+                </div>
               </div>
-            </form>
-          </div>
-        </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setShowSettleModal(false)}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={rejectClaimMutation.isPending}
+                onClick={() => rejectClaimMutation.mutate()}
+                className="px-4 py-2 border border-red-300 text-red-700 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50"
+              >
+                Reject claim
+              </button>
+              <button
+                type="submit"
+                disabled={settleClaimMutation.isPending}
+                className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
+              >
+                Approve Settlement
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );

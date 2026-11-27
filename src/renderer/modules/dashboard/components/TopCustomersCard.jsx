@@ -1,12 +1,6 @@
 import React, { useMemo } from 'react';
 import { BaseChart } from '../../../shared/components/BaseChart.jsx';
-
-const inrFormatter = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { rupees } from '../../../shared/format.js';
 
 /**
  * Top Customers Card Component.
@@ -84,9 +78,9 @@ export function TopCustomersCard({ customers, isLoading }) {
               const c = customers[index];
               if (!c) return [];
               return [
-                `Revenue: ${inrFormatter.format(c.revenue)}`,
-                `Cost: ${inrFormatter.format(c.cost)}`,
-                `Profit: ${inrFormatter.format(c.profit)}`,
+                `Revenue: ${rupees(c.revenue)}`,
+                `Cost: ${rupees(c.cost)}`,
+                `Profit: ${rupees(c.profit)}`,
               ];
             },
           },

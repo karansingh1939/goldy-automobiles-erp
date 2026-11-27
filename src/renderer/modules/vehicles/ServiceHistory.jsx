@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../shared/api/api-client.js';
 import RemoteSelect from '../../shared/components/RemoteSelect.jsx';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
-const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
+import { money } from '../../shared/format.js';
 export default function ServiceHistory() {
   const [params] = useSearchParams();
   const [vehicleId, setVehicleId] = useState(params.get('vehicleId') || '');

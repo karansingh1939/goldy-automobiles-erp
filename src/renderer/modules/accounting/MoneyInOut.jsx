@@ -5,13 +5,12 @@ import { useAppStore } from '../../shared/store/use-app-store.js';
 import RemoteSelect from '../../shared/components/RemoteSelect.jsx';
 import { localDate } from '../../../../public/local-date.js';
 import { BelowZeroNote, useMoneyAccounts } from '../../shared/components/MoneyWarning.jsx';
+import { rupees } from '../../shared/format.js';
 
 const input =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-base dark:border-gray-700 dark:bg-gray-800';
 const card =
   'space-y-3 rounded-xl border bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900';
-const rupees = (value) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(value || 0));
 
 const CHOICES = {
   IN: [

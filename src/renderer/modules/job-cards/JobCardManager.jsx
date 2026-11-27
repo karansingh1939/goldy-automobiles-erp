@@ -10,7 +10,9 @@ import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import RemoteSelect from '../../shared/components/RemoteSelect.jsx';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
 import { formatLocalTimestamp } from '../../shared/utils/date-time.js';
-import { Search, Plus, X, CheckCircle } from 'lucide-react';
+import { Search, Plus, CheckCircle } from 'lucide-react';
+import { bankAccounts, useMoneyAccounts } from '../../shared/components/MoneyWarning.jsx';
+import { FormButtons, Modal } from '../../shared/components/FormParts.jsx';
 
 // Plain words for job card states.
 const STATUS_LABEL = {
@@ -207,14 +209,7 @@ export default function JobCardManager() {
     onError: (err) => addNotification(err.message || 'Could not add labour.', 'error'),
   });
 
-  const moneyAccounts = useQuery({
-    queryKey: ['money-accounts'],
-    queryFn: () => api.get('/api/v1/accounting/money-accounts'),
-    enabled: confirmFinalizeId !== null,
-  });
-  const bankAccounts = (
-    Array.isArray(moneyAccounts.data?.data) ? moneyAccounts.data.data : []
-  ).filter((account) => account.kind === 'BANK');
+  const banks = bankAccounts(useMoneyAccounts({ enabled: confirmFinalizeId !== null }));
   const finalizeMutation = useMutation({
     mutationFn: () => api.post(`/api/v1/job-cards/${selectedJcId}/finalize`),
     onSuccess: async (result) => {
@@ -227,8 +222,7 @@ export default function JobCardManager() {
         return;
       }
       // Record the payment the customer made at the counter.
-      const bankId =
-        Number(payAccountId) || (bankAccounts.length === 1 ? bankAccounts[0].id : null);
+      const bankId = Number(payAccountId) || (banks.length === 1 ? banks[0].id : null);
       try {
         await api.post('/api/v1/accounting/receipts', {
           customerId: invoice.customer_id,
@@ -545,7 +539,7 @@ export default function JobCardManager() {
                         <option value="CARD">Paid by card</option>
                       </select>
                     </label>
-                    {(payMode === 'UPI' || payMode === 'CARD') && bankAccounts.length > 1 && (
+                    {(payMode === 'UPI' || payMode === 'CARD') && banks.length > 1 && (
                       <label className="text-sm font-medium">
                         Into bank account
                         <select
@@ -554,7 +548,7 @@ export default function JobCardManager() {
                           onChange={(event) => setPayAccountId(event.target.value)}
                         >
                           <option value="">Choose bank</option>
-                          {bankAccounts.map((bank) => (
+                          {banks.map((bank) => (
                             <option key={bank.id} value={bank.id}>
                               {bank.name}
                             </option>
@@ -570,7 +564,7 @@ export default function JobCardManager() {
                       disabled={
                         finalizeMutation.isPending ||
                         ((payMode === 'UPI' || payMode === 'CARD') &&
-                          bankAccounts.length > 1 &&
+                          banks.length > 1 &&
                           !payAccountId)
                       }
                     >
@@ -771,236 +765,189 @@ export default function JobCardManager() {
 
       {/* Log Part Modal */}
       {showPartModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <h3 className="text-base font-bold text-gray-950 dark:text-white">Add Part Line</h3>
-              <button
-                onClick={() => setShowPartModal(false)}
-                className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-850"
+        <Modal title={'Add Part Line'} onClose={() => setShowPartModal(false)} size="md">
+          <form onSubmit={handleAddPart} className="p-6 space-y-4">
+            <div>
+              <label
+                htmlFor="modal-part-select"
+                className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
               >
-                <X className="h-4 w-4" />
-              </button>
+                Select Part *
+              </label>
+              <RemoteSelect
+                id="modal-part-select"
+                endpoint="/api/v1/inventory/items"
+                queryKey="inventory-items"
+                value={partItemId}
+                onChange={(next, record) => {
+                  setPartItemId(next);
+                  setBatchId('');
+                  setPartPrice(next ? String(record?.selling_price ?? '') : '');
+                  setPartGst(String(record?.gst_rate ?? 18));
+                  setSelectedPart(next ? record : null);
+                }}
+                searchLabel="Search parts"
+                optionLabel={(i) => `${i.sku} - ${i.item_name} (Stock: ${i.current_quantity})`}
+              />
             </div>
-            <form onSubmit={handleAddPart} className="p-6 space-y-4">
+            <label htmlFor="modal-part-batch" className="block text-sm">
+              Store / batch *
+            </label>
+            <select
+              id="modal-part-batch"
+              required
+              value={batchId}
+              disabled={!partItemId || batchesQuery.isFetching}
+              onChange={(e) => setBatchId(e.target.value)}
+              className="w-full rounded border p-2 dark:bg-gray-800"
+            >
+              <option value="">Select batch...</option>
+              {batches.map((batch) => (
+                <option key={batch.id} value={batch.id} disabled={Number(batch.quantity) <= 0}>
+                  {batch.warehouse_name} / {batch.batch_number} (Stock: {batch.quantity})
+                </option>
+              ))}
+            </select>
+            {batchesQuery.error && (
+              <p role="alert">
+                {batchesQuery.error.message}{' '}
+                <button type="button" onClick={() => batchesQuery.refetch()}>
+                  Retry
+                </button>
+              </p>
+            )}
+            <label className="block text-sm">
+              Part GST %
+              <input
+                aria-label="Part GST %"
+                className="w-full rounded border p-2 dark:bg-gray-800"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                required
+                value={partGst}
+                onChange={(e) => setPartGst(e.target.value)}
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
-                  htmlFor="modal-part-select"
+                  htmlFor="modal-part-qty"
                   className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
                 >
-                  Select Part *
+                  Quantity *
                 </label>
-                <RemoteSelect
-                  id="modal-part-select"
-                  endpoint="/api/v1/inventory/items"
-                  queryKey="inventory-items"
-                  value={partItemId}
-                  onChange={(next, record) => {
-                    setPartItemId(next);
-                    setBatchId('');
-                    setPartPrice(next ? String(record?.selling_price ?? '') : '');
-                    setPartGst(String(record?.gst_rate ?? 18));
-                    setSelectedPart(next ? record : null);
-                  }}
-                  searchLabel="Search parts"
-                  optionLabel={(i) => `${i.sku} - ${i.item_name} (Stock: ${i.current_quantity})`}
-                />
-              </div>
-              <label htmlFor="modal-part-batch" className="block text-sm">
-                Store / batch *
-              </label>
-              <select
-                id="modal-part-batch"
-                required
-                value={batchId}
-                disabled={!partItemId || batchesQuery.isFetching}
-                onChange={(e) => setBatchId(e.target.value)}
-                className="w-full rounded border p-2 dark:bg-gray-800"
-              >
-                <option value="">Select batch...</option>
-                {batches.map((batch) => (
-                  <option key={batch.id} value={batch.id} disabled={Number(batch.quantity) <= 0}>
-                    {batch.warehouse_name} / {batch.batch_number} (Stock: {batch.quantity})
-                  </option>
-                ))}
-              </select>
-              {batchesQuery.error && (
-                <p role="alert">
-                  {batchesQuery.error.message}{' '}
-                  <button type="button" onClick={() => batchesQuery.refetch()}>
-                    Retry
-                  </button>
-                </p>
-              )}
-              <label className="block text-sm">
-                Part GST %
                 <input
-                  aria-label="Part GST %"
-                  className="w-full rounded border p-2 dark:bg-gray-800"
+                  id="modal-part-qty"
+                  min="0.001"
+                  step="0.001"
                   type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
                   required
-                  value={partGst}
-                  onChange={(e) => setPartGst(e.target.value)}
+                  value={partQty}
+                  onChange={(e) => setPartQty(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
                 />
-              </label>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="modal-part-qty"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Quantity *
-                  </label>
-                  <input
-                    id="modal-part-qty"
-                    min="0.001"
-                    step="0.001"
-                    type="number"
-                    required
-                    value={partQty}
-                    onChange={(e) => setPartQty(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="modal-part-price"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Price (₹)
-                  </label>
-                  <input
-                    id="modal-part-price"
-                    min="0"
-                    step="0.01"
-                    type="number"
-                    value={partPrice}
-                    onChange={(e) => setPartPrice(e.target.value)}
-                    placeholder="Item default price"
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
               </div>
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setShowPartModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+              <div>
+                <label
+                  htmlFor="modal-part-price"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={
-                    !canWrite ||
-                    addPartMutation.isPending ||
-                    !batchId ||
-                    Boolean(batchesQuery.error)
-                  }
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Add Part
-                </button>
+                  Price (₹)
+                </label>
+                <input
+                  id="modal-part-price"
+                  min="0"
+                  step="0.01"
+                  type="number"
+                  value={partPrice}
+                  onChange={(e) => setPartPrice(e.target.value)}
+                  placeholder="Item default price"
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                />
               </div>
-            </form>
-          </div>
-        </div>
+            </div>
+            <FormButtons
+              onCancel={() => setShowPartModal(false)}
+              saving={
+                !canWrite || addPartMutation.isPending || !batchId || Boolean(batchesQuery.error)
+              }
+              saveLabel="Add Part"
+            />
+          </form>
+        </Modal>
       )}
 
       {/* Log Labour Modal */}
       {showLabourModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <h3 className="text-base font-bold text-gray-950 dark:text-white">Add labour</h3>
-              <button
-                onClick={() => setShowLabourModal(false)}
-                className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-850"
+        <Modal title={'Add labour'} onClose={() => setShowLabourModal(false)} size="md">
+          <form onSubmit={handleAddLabour} className="p-6 space-y-4">
+            <div>
+              <label
+                htmlFor="modal-labour-desc"
+                className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
               >
-                <X className="h-4 w-4" />
-              </button>
+                Description *
+              </label>
+              <input
+                id="modal-labour-desc"
+                type="text"
+                required
+                value={labourDesc}
+                onChange={(e) => setLabourDesc(e.target.value)}
+                placeholder="E.g. Wheel alignment and balancing"
+                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+              />
             </div>
-            <form onSubmit={handleAddLabour} className="p-6 space-y-4">
-              <div>
-                <label
-                  htmlFor="modal-labour-desc"
-                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                >
-                  Description *
-                </label>
-                <input
-                  id="modal-labour-desc"
-                  type="text"
-                  required
-                  value={labourDesc}
-                  onChange={(e) => setLabourDesc(e.target.value)}
-                  placeholder="E.g. Wheel alignment and balancing"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="modal-labour-cost"
-                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                >
-                  Labour charge (₹) *
-                </label>
-                <input
-                  id="modal-labour-cost"
-                  min="0"
-                  step="0.01"
-                  type="number"
-                  required
-                  value={labourCost}
-                  onChange={(e) => setLabourCost(e.target.value)}
-                  placeholder="0.00"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                />
-              </div>
-              <label className="block text-sm">
-                Labour GST %
-                <input
-                  aria-label="Labour GST %"
-                  className="w-full rounded border p-2 dark:bg-gray-800"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  required
-                  value={labourGst}
-                  onChange={(e) => setLabourGst(e.target.value)}
-                />
+            <div>
+              <label
+                htmlFor="modal-labour-cost"
+                className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+              >
+                Labour charge (₹) *
               </label>
-              <label className="flex gap-2">
-                <input
-                  type="checkbox"
-                  checked={outsideJob}
-                  onChange={(e) => setOutsideJob(e.target.checked)}
-                />
-                Outside job
-              </label>
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setShowLabourModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={!canWrite || addLabourMutation.isPending}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Add labour
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+              <input
+                id="modal-labour-cost"
+                min="0"
+                step="0.01"
+                type="number"
+                required
+                value={labourCost}
+                onChange={(e) => setLabourCost(e.target.value)}
+                placeholder="0.00"
+                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+              />
+            </div>
+            <label className="block text-sm">
+              Labour GST %
+              <input
+                aria-label="Labour GST %"
+                className="w-full rounded border p-2 dark:bg-gray-800"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                required
+                value={labourGst}
+                onChange={(e) => setLabourGst(e.target.value)}
+              />
+            </label>
+            <label className="flex gap-2">
+              <input
+                type="checkbox"
+                checked={outsideJob}
+                onChange={(e) => setOutsideJob(e.target.checked)}
+              />
+              Outside job
+            </label>
+            <FormButtons
+              onCancel={() => setShowLabourModal(false)}
+              saving={!canWrite || addLabourMutation.isPending}
+              saveLabel="Add labour"
+            />
+          </form>
+        </Modal>
       )}
     </div>
   );

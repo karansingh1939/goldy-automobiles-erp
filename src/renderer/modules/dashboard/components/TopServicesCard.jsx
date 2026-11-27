@@ -1,12 +1,6 @@
 import React, { useMemo } from 'react';
 import { BaseChart } from '../../../shared/components/BaseChart.jsx';
-
-const inrFormatter = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { rupees } from '../../../shared/format.js';
 
 const PALETTE = [
   '#3b82f6', // blue-500
@@ -65,7 +59,7 @@ export function TopServicesCard({ services, isLoading }) {
               return [
                 `Count: ${s.count}`,
                 `Total Quantity: ${s.totalQuantity}`,
-                `Total Revenue: ${inrFormatter.format(s.totalRevenue)}`,
+                `Total Revenue: ${rupees(s.totalRevenue)}`,
               ];
             },
           },
@@ -127,7 +121,7 @@ export function TopServicesCard({ services, isLoading }) {
                     </div>
                     <div className="text-right shrink-0">
                       <span className="block text-sm font-bold text-gray-900">
-                        {inrFormatter.format(service.totalRevenue)}
+                        {rupees(service.totalRevenue)}
                       </span>
                       <span className="block text-xs font-medium text-gray-500">
                         {service.count} {service.count === 1 ? 'job' : 'jobs'}

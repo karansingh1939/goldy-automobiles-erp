@@ -1,5 +1,7 @@
 import React from 'react';
-export const money = (value) => `₹${Number(value || 0).toFixed(2)}`;
+import { money } from '../../shared/format.js';
+
+export { money };
 export default function JobCardCharges({ job, onRemove, removing }) {
   const parts = job.parts || [],
     labour = job.labour || [];

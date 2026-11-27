@@ -1,3 +1,5 @@
+import { whereClause } from '../expenses/expense.repository.js';
+
 // Invoice net profit is gross profit before shared workshop expenses.
 const returnedLinesCte = `returned_lines AS (
   SELECT invoices.id, invoices.customer_id, invoices.vehicle_id, invoices.job_card_id,
@@ -89,26 +91,6 @@ function invoiceWhereClause(filters = {}) {
   };
 }
 
-function expenseWhereClause(filters = {}) {
-  const clauses = [];
-  const params = {};
-
-  if (filters.dateFrom) {
-    clauses.push('DATE(expenses.expense_date) >= DATE(@dateFrom)');
-    params.dateFrom = filters.dateFrom;
-  }
-
-  if (filters.dateTo) {
-    clauses.push('DATE(expenses.expense_date) <= DATE(@dateTo)');
-    params.dateTo = filters.dateTo;
-  }
-
-  return {
-    clause: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
-    params,
-  };
-}
-
 export class ProfitRepository {
   constructor(db) {
     this.db = db;
@@ -116,7 +98,7 @@ export class ProfitRepository {
 
   summary(filters) {
     const invoices = invoiceWhereClause(filters);
-    const expenses = expenseWhereClause(filters);
+    const expenses = whereClause(filters);
 
     const profit = this.db
       .prepare(

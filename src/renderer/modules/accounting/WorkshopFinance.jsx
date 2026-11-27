@@ -4,8 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { usePermissions } from '../../shared/hooks/use-permissions.js';
 import { localDate } from '../../../../public/local-date.js';
+import { money } from '../../shared/format.js';
 
-const money = (amount) => `₹${Number(amount || 0).toFixed(2)}`;
 function Table({ caption, columns, rows }) {
   return (
     <div className="overflow-x-auto">

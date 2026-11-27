@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { invalidateInventory } from '../../shared/api/inventory-cache.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
-import { Search, Plus, Undo2, X } from 'lucide-react';
+import { Search, Plus, Undo2 } from 'lucide-react';
 import SupplierReturnForm from './SupplierReturnForm.jsx';
+import { FormButtons, Modal } from '../../shared/components/FormParts.jsx';
 
 const STATUS_WORDS = {
   DRAFT: 'Draft',
@@ -357,148 +358,127 @@ export default function ReturnsManager() {
 
       {/* Create Return Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-slide-up">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <div className="flex items-center gap-2 text-brand-600 dark:text-brand-400">
-                <Undo2 className="h-5 w-5" />
-                <h3 className="text-lg font-bold">New Sales Invoice Return</h3>
+        <Modal
+          title={'New Sales Invoice Return'}
+          icon={Undo2}
+          onClose={() => setShowAddModal(false)}
+          size="lg"
+        >
+          {formError && (
+            <p role="alert" className="px-6 text-sm text-red-700">
+              {formError.message}
+            </p>
+          )}
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label
+                  htmlFor="modal-ret-invoice"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Select Invoice *
+                </label>
+                <input
+                  aria-label="Find completed job"
+                  placeholder="Search job number, customer, or vehicle..."
+                  value={invoiceSearch}
+                  onChange={(e) => {
+                    setInvoiceSearch(e.target.value);
+                    setJobCardId('');
+                    setItemId('');
+                  }}
+                  className="mt-1 block w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-800"
+                />
+                <select
+                  id="modal-ret-invoice"
+                  required
+                  value={jobCardId}
+                  onChange={(e) => {
+                    setJobCardId(e.target.value);
+                    setItemId('');
+                  }}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                >
+                  <option value="">Choose the bill...</option>
+                  {invoices.map((inv) => (
+                    <option
+                      key={inv.id}
+                      value={inv.id}
+                    >{`Bill ${inv.invoice_number || inv.job_card_number} · ${inv.customer_name} · ${inv.registration_number || ''}`}</option>
+                  ))}
+                </select>
               </div>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="col-span-2">
+                <label
+                  htmlFor="modal-ret-part"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Select Returned Part *
+                </label>
+                <select
+                  id="modal-ret-part"
+                  required
+                  value={itemId}
+                  onChange={(e) => setItemId(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                >
+                  <option value="">Select invoice line...</option>
+                  {items.map((i) => (
+                    <option
+                      key={i.id || i.inventory_item_id}
+                      value={i.id}
+                    >{`${i.description} (sold: ${i.quantity})`}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label
+                  htmlFor="modal-ret-qty"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Return Quantity *
+                </label>
+                <input
+                  id="modal-ret-qty"
+                  type="number"
+                  required
+                  min="0.001"
+                  step="any"
+                  max={selectedItem?.quantity}
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                />
+              </div>
+              <p className="col-span-2 text-xs text-gray-500">
+                Returned stock goes back to the original invoice batch and warehouse.
+              </p>
+              <div>
+                <label
+                  htmlFor="modal-ret-condition"
+                  className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
+                >
+                  Condition Status
+                </label>
+                <select
+                  id="modal-ret-condition"
+                  value={condition}
+                  onChange={(e) => setCondition(e.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
+                >
+                  <option value="GOOD">Good (Restorable)</option>
+                  <option value="DAMAGED">Damaged (Write-off Loss)</option>
+                </select>
+              </div>
             </div>
 
-            {formError && (
-              <p role="alert" className="px-6 text-sm text-red-700">
-                {formError.message}
-              </p>
-            )}
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label
-                    htmlFor="modal-ret-invoice"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Select Invoice *
-                  </label>
-                  <input
-                    aria-label="Find completed job"
-                    placeholder="Search job number, customer, or vehicle..."
-                    value={invoiceSearch}
-                    onChange={(e) => {
-                      setInvoiceSearch(e.target.value);
-                      setJobCardId('');
-                      setItemId('');
-                    }}
-                    className="mt-1 block w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-800"
-                  />
-                  <select
-                    id="modal-ret-invoice"
-                    required
-                    value={jobCardId}
-                    onChange={(e) => {
-                      setJobCardId(e.target.value);
-                      setItemId('');
-                    }}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  >
-                    <option value="">Choose the bill...</option>
-                    {invoices.map((inv) => (
-                      <option
-                        key={inv.id}
-                        value={inv.id}
-                      >{`Bill ${inv.invoice_number || inv.job_card_number} · ${inv.customer_name} · ${inv.registration_number || ''}`}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label
-                    htmlFor="modal-ret-part"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Select Returned Part *
-                  </label>
-                  <select
-                    id="modal-ret-part"
-                    required
-                    value={itemId}
-                    onChange={(e) => setItemId(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  >
-                    <option value="">Select invoice line...</option>
-                    {items.map((i) => (
-                      <option
-                        key={i.id || i.inventory_item_id}
-                        value={i.id}
-                      >{`${i.description} (sold: ${i.quantity})`}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="modal-ret-qty"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Return Quantity *
-                  </label>
-                  <input
-                    id="modal-ret-qty"
-                    type="number"
-                    required
-                    min="0.001"
-                    step="any"
-                    max={selectedItem?.quantity}
-                    value={qty}
-                    onChange={(e) => setQty(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  />
-                </div>
-                <p className="col-span-2 text-xs text-gray-500">
-                  Returned stock goes back to the original invoice batch and warehouse.
-                </p>
-                <div>
-                  <label
-                    htmlFor="modal-ret-condition"
-                    className="block text-xs font-semibold text-gray-600 dark:text-gray-400"
-                  >
-                    Condition Status
-                  </label>
-                  <select
-                    id="modal-ret-condition"
-                    value={condition}
-                    onChange={(e) => setCondition(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-800 text-sm focus-ring text-gray-950 dark:text-white"
-                  >
-                    <option value="GOOD">Good (Restorable)</option>
-                    <option value="DAMAGED">Damaged (Write-off Loss)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createMutation.isPending || !selectedItem || Boolean(formError)}
-                  className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                >
-                  Draft Return
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <FormButtons
+              onCancel={() => setShowAddModal(false)}
+              saving={createMutation.isPending || !selectedItem || Boolean(formError)}
+              saveLabel="Draft Return"
+            />
+          </form>
+        </Modal>
       )}
     </div>
   );

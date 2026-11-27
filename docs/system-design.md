@@ -87,12 +87,12 @@ flowchart LR
 
 Each feature module in `src/server/modules/<feature>/` has the same layers:
 
-| Layer             | Job                                                                    |
-| ----------------- | ---------------------------------------------------------------------- |
-| `*.routes.js`     | URL, sign-in check, permission check (`requirePermission`).            |
-| `*.controller.js` | Reads the request, calls the service, sends JSON.                      |
-| `*.service.js`    | Business rules, validation, one transaction per action, audit records. |
-| `*.repository.js` | SQL queries only.                                                      |
+| Layer             | Job                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `*.routes.js`     | URL, sign-in check, permission check (`requirePermission`).                                 |
+| `*.controller.js` | One line per endpoint: `respond(fn)` or `respondData(fn)` calls the service and sends JSON. |
+| `*.service.js`    | Business rules, validation, one transaction per action, audit records.                      |
+| `*.repository.js` | SQL queries only.                                                                           |
 
 Rules that hold everywhere:
 
@@ -116,7 +116,27 @@ Rules that hold everywhere:
 - **Audit log.** Creates, edits, cancels, refunds, salary payments and
   restores write an audit record with old and new values.
 - **Plain errors.** Services throw `AppError(message, status, code)`. The
-  message is written for the owner and shown on screen.
+  message is written for the owner and shown on screen. SQLite constraint
+  failures (duplicate, missing related record, record in use) are turned into
+  plain messages once, in the error handler (`shared/errors/database-error.js`).
+
+### Shared building blocks
+
+Code that every module needs lives in one place instead of being copied:
+
+| File                                          | What it gives                                                                                                               |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `shared/http/respond.js`                      | `respond` / `respondData`: send the result as JSON, pass errors on.                                                         |
+| `shared/utils/numbers.js`                     | `toNumber`, `roundMoney` (paise; same rounding as before it was shared).                                                    |
+| `shared/utils/validation.js`                  | `required`, `parsePaging` + `pageInfo`, `isIsoDate`/`optionalDate`, `sqlWhere`.                                             |
+| `shared/utils/report-period.js`               | Report range from today / this month / this year / from-to.                                                                 |
+| `shared/utils/local-date.js`                  | Laptop-calendar dates: `localDate`, `localDateOf(UTC timestamp)`, `addMonths` (31 Jan + 1 month = 28/29 Feb), `monthStart`. |
+| `modules/accounting/ledgers.js`               | Make a ledger, system accounts on first use, cash-or-bank ledger for a payment.                                             |
+| `modules/job-cards/intake-lookup.service.js`  | Phone and registration clean-up; customer and vehicle lookups.                                                              |
+| `renderer/shared/format.js`                   | `rupees`, `rupeesWhole`, `money` for every screen.                                                                          |
+| `renderer/shared/components/FormParts.jsx`    | Text field, pop-up, Cancel/Save buttons, Edit/Delete row buttons.                                                           |
+| `renderer/shared/components/PartyScreen.jsx`  | The Customers and Suppliers screens (one component, two configs).                                                           |
+| `renderer/shared/components/MoneyWarning.jsx` | Cash/bank balances hook, below-zero note, Home warning.                                                                     |
 
 ## 5. Data design
 
