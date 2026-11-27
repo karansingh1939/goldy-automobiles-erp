@@ -1,4 +1,5 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { InventoryRepository } from './inventory.repository.js';
@@ -301,7 +302,7 @@ export class InventoryService {
 
     return this.repository.transaction(() => {
       const adjustmentId = this.repository.createStockAdjustment({
-        adjustment_number: code('OPEN'),
+        adjustment_number: nextDocumentNumber(this.db, DocumentSeries.OPENING_STOCK, localDate()),
         item_id: payload.item_id,
         batch_id: null,
         warehouse_id: payload.warehouse_id,
@@ -422,7 +423,11 @@ export class InventoryService {
         }
 
         adjustmentId = this.repository.createStockAdjustment({
-          adjustment_number: code('ADJ'),
+          adjustment_number: nextDocumentNumber(
+            this.db,
+            DocumentSeries.STOCK_ADJUSTMENT,
+            localDate(),
+          ),
           item_id: itemId,
           batch_id: batchId || null,
           warehouse_id: warehouseId,
@@ -500,7 +505,11 @@ export class InventoryService {
         }
 
         adjustmentId = this.repository.createStockAdjustment({
-          adjustment_number: code('ADJ'),
+          adjustment_number: nextDocumentNumber(
+            this.db,
+            DocumentSeries.STOCK_ADJUSTMENT,
+            localDate(),
+          ),
           item_id: itemId,
           batch_id: batchId,
           warehouse_id: warehouseId,
@@ -627,7 +636,7 @@ export class InventoryService {
       }
 
       const transferId = this.repository.createStockTransfer({
-        transfer_number: code('TRF'),
+        transfer_number: nextDocumentNumber(this.db, DocumentSeries.STOCK_MOVE, localDate()),
         item_id: payload.item_id,
         batch_id: sourceBatch.id,
         from_warehouse_id: payload.from_warehouse_id,
@@ -1396,7 +1405,11 @@ export class InventoryService {
         }
 
         const difference = countedQty - previousQty;
-        const verificationNumber = code('VER');
+        const verificationNumber = nextDocumentNumber(
+          this.db,
+          DocumentSeries.STOCK_COUNT,
+          localDate(),
+        );
 
         this.db
           .prepare(

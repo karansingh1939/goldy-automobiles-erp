@@ -4,6 +4,20 @@ import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import { Search, X } from 'lucide-react';
 
+const STATUS_WORDS = {
+  DRAFT: 'Draft',
+  COMPLETED: 'Approved',
+  CANCELLED: 'Cancelled',
+  ACTIVE: 'Active',
+  EXPIRED: 'Expired',
+  CLAIMED: 'Claimed',
+  PENDING: 'Waiting',
+  APPROVED: 'Approved',
+  SETTLED: 'Settled',
+  REJECTED: 'Rejected',
+};
+const statusWord = (status) => STATUS_WORDS[status] || status;
+
 export default function WarrantyManager() {
   const queryClient = useQueryClient();
   const addNotification = useAppStore((state) => state.addNotification);
@@ -206,7 +220,7 @@ export default function WarrantyManager() {
                             : 'bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-400'
                         }`}
                       >
-                        {r.status}
+                        {statusWord(r.status)}
                       </span>
                     </td>
                     <td className="px-4 py-4 text-center">
@@ -265,7 +279,7 @@ export default function WarrantyManager() {
                           : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-400'
                       }`}
                     >
-                      {c.status}
+                      {statusWord(c.status)}
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">

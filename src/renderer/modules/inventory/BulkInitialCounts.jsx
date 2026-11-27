@@ -14,9 +14,9 @@ export default function BulkInitialCounts() {
   return (
     <div className="space-y-3">
       <p>
-        Initial setup counts compare total item stock and post changes in the default warehouse (ID
-        1). For routine counts in another godown, use stock verification. Edits remain selected
-        across pages.
+        Use this once when you start: type how many of each item you have. The difference is added
+        to or taken from the main godown, and the accounts follow. For later counts use the Count
+        stock tab.
       </p>
       <Register
         endpoint="/api/v1/inventory/items"

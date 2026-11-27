@@ -4,6 +4,21 @@ import { api } from '../../shared/api/api-client.js';
 import { invalidateInventory } from '../../shared/api/inventory-cache.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import { Search, Plus, Undo2, X } from 'lucide-react';
+import SupplierReturnForm from './SupplierReturnForm.jsx';
+
+const STATUS_WORDS = {
+  DRAFT: 'Draft',
+  COMPLETED: 'Approved',
+  CANCELLED: 'Cancelled',
+  ACTIVE: 'Active',
+  EXPIRED: 'Expired',
+  CLAIMED: 'Claimed',
+  PENDING: 'Waiting',
+  APPROVED: 'Approved',
+  SETTLED: 'Settled',
+  REJECTED: 'Rejected',
+};
+const statusWord = (status) => STATUS_WORDS[status] || status;
 
 export default function ReturnsManager() {
   const queryClient = useQueryClient();
@@ -12,6 +27,7 @@ export default function ReturnsManager() {
   const [activeTab, setActiveTab] = useState('customer');
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showSupplierForm, setShowSupplierForm] = useState(false);
 
   // Form State (Customer Return)
   const [jobCardId, setJobCardId] = useState('');
@@ -164,7 +180,19 @@ export default function ReturnsManager() {
             New Return
           </button>
         )}
+        {activeTab === 'supplier' && !showSupplierForm && (
+          <button
+            onClick={() => setShowSupplierForm(true)}
+            className="flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            Send parts back to supplier
+          </button>
+        )}
       </div>
+      {activeTab === 'supplier' && showSupplierForm && (
+        <SupplierReturnForm onDone={() => setShowSupplierForm(false)} />
+      )}
 
       <div className="flex border-b border-gray-200 dark:border-gray-800">
         <button
@@ -238,7 +266,7 @@ export default function ReturnsManager() {
                             : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-400'
                         }`}
                       >
-                        {r.status}
+                        {statusWord(r.status)}
                       </span>
                     </td>
                     <td className="px-4 py-4 text-center">
@@ -299,7 +327,7 @@ export default function ReturnsManager() {
                           : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-400'
                       }`}
                     >
-                      {r.status}
+                      {statusWord(r.status)}
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">

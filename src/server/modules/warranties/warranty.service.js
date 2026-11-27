@@ -1,12 +1,9 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { WarrantyRepository } from './warranty.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
-
-function code(prefix) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
 
 export class WarrantyService {
   constructor(db) {
@@ -88,7 +85,7 @@ export class WarrantyService {
       }
 
       return this.repository.createWarrantyClaim({
-        claim_number: code('WC'),
+        claim_number: nextDocumentNumber(this.db, DocumentSeries.WARRANTY_CLAIM, date),
         company_id: reg.company_id || 1,
         warranty_registration_id: registrationId,
         claim_date: date,

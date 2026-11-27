@@ -1,4 +1,5 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
@@ -18,10 +19,6 @@ function required(value, label) {
   if (value === undefined || value === null || value === '') {
     throw new AppError(`${label} is required.`, 400, 'VALIDATION_ERROR');
   }
-}
-
-function code(prefix) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 }
 
 function normalizeDatabaseError(error) {
@@ -115,7 +112,9 @@ export class PurchasingService {
     try {
       return this.repository.transaction(() => {
         const orderId = this.repository.createPurchaseOrder({
-          order_number: payload.order_number || code('PO'),
+          order_number:
+            payload.order_number ||
+            nextDocumentNumber(this.db, DocumentSeries.PURCHASE_ORDER, localDate()),
           supplier_id: supplier.id,
           order_date: payload.order_date || localDate(),
           expected_date: payload.expected_date || null,
@@ -192,7 +191,13 @@ export class PurchasingService {
       );
     }
 
-    const receiptNumber = payload.receipt_number || code('GRN');
+    const receiptNumber =
+      payload.receipt_number ||
+      nextDocumentNumber(
+        this.db,
+        DocumentSeries.GOODS_RECEIPT,
+        payload.receipt_date || localDate(),
+      );
     // Spare parts rarely carry real batch numbers; when left blank, the
     // supplier bill number identifies the lot so the owner can skip the field.
     const withBatches = Array.isArray(payload.items)

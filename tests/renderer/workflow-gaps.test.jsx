@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CustomerManager from '../../src/renderer/modules/customers/CustomerManager.jsx';
 import VehicleManager from '../../src/renderer/modules/vehicles/VehicleManager.jsx';
 import CounterSale from '../../src/renderer/modules/sales/CounterSale.jsx';
+import SupplierReturnForm from '../../src/renderer/modules/returns/SupplierReturnForm.jsx';
 import PurchasingManager from '../../src/renderer/modules/purchasing/PurchasingManager.jsx';
 import JobCardManager from '../../src/renderer/modules/job-cards/JobCardManager.jsx';
 import { useAppStore } from '../../src/renderer/shared/store/use-app-store.js';
@@ -284,4 +285,51 @@ it('makes a cash counter sale and pays that bill', async () => {
       items: [expect.objectContaining({ itemId: 3, warehouseId: 2, unitPrice: 400 })],
     }),
   );
+});
+
+it('sends parts back to a supplier from a supplier bill', async () => {
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url.startsWith('/api/v1/purchases/receipts/7'))
+      return {
+        data: {
+          id: 7,
+          supplier_id: 4,
+          items: [
+            { id: 70, item_id: 3, batch_id: 9, item_name: 'Oil', quantity: 10, purchase_cost: 300 },
+          ],
+        },
+      };
+    if (url.startsWith('/api/v1/purchases/receipts'))
+      return {
+        data: [
+          { id: 7, receipt_number: 'TS-1', supplier_name: 'Spares Co', receipt_date: '2026-11-27' },
+        ],
+        pagination: { totalPages: 1 },
+      };
+    return { data: [], pagination: { totalPages: 1 } };
+  });
+  const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { id: 1 } });
+  const done = vi.fn();
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <SupplierReturnForm onDone={done} />
+    </QueryClientProvider>,
+  );
+  await screen.findByRole('option', { name: /Bill TS-1/ });
+  fireEvent.change(screen.getByLabelText('Supplier bill the parts came on'), {
+    target: { value: '7' },
+  });
+  await screen.findByRole('option', { name: /Oil · bought 10/ });
+  fireEvent.change(screen.getByLabelText('Item'), { target: { value: '70' } });
+  fireEvent.change(screen.getByLabelText('How many to send back'), { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save return' }));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      '/api/v1/returns/supplier',
+      expect.objectContaining({ supplierId: 4, items: [{ itemId: 3, batchId: 9, quantity: 2 }] }),
+    ),
+  );
+  expect(done).toHaveBeenCalled();
 });

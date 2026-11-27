@@ -11,7 +11,15 @@ export const DocumentSeries = Object.freeze({
   COUNTER_INVOICE: 'CS', // counter sale and sales-order shipment tax invoices
   JOB_CARD: 'JC',
   CREDIT_NOTE: 'CN', // customer returns (GST credit notes)
-  DEBIT_NOTE: 'DN', // returns to suppliers // job cards (not a tax document, but easy to read out)
+  DEBIT_NOTE: 'DN', // returns to suppliers
+  // Not tax documents, but short numbers are easier to read out and find:
+  PURCHASE_ORDER: 'PO',
+  GOODS_RECEIPT: 'GRN', // supplier bill entered without the supplier's number
+  WARRANTY_CLAIM: 'WC',
+  STOCK_COUNT: 'SC',
+  STOCK_MOVE: 'MV',
+  STOCK_ADJUSTMENT: 'ADJ',
+  OPENING_STOCK: 'OPN', // job cards (not a tax document, but easy to read out)
 });
 
 const MAX_LENGTH = 16;
