@@ -193,9 +193,7 @@ export default function SettingsPortal() {
           <BackupUpload />
           {/* Backups List */}
           <div className="space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-              Backup File Registry
-            </h4>
+            <h4 className="text-sm font-bold text-gray-500">Backup File Registry</h4>
             <div className="border border-gray-200 dark:border-gray-800 rounded-lg max-h-40 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-800">
               {loadingBackups ? (
                 <div className="p-4 text-center text-xs text-gray-400">

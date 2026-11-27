@@ -118,10 +118,10 @@ export default function WarrantyManager() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            Warranty & Claims Hub
+            Warranties
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Track parts warranty expirations, look up active registrations, and process claims.
+            Parts sold with a warranty, and claims when one fails.
           </p>
         </div>
       </div>

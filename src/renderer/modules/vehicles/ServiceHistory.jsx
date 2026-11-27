@@ -20,7 +20,7 @@ export default function ServiceHistory() {
     return <p className="p-6">Vehicle read permission required.</p>;
   return (
     <div className="p-6 space-y-5">
-      <h1 className="text-2xl font-bold">Vehicle Service History</h1>
+      <h1 className="text-2xl font-bold">Service History</h1>
       <label htmlFor="history-vehicle">Vehicle</label>
       <RemoteSelect
         id="history-vehicle"

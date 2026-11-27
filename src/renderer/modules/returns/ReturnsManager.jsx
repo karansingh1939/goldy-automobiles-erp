@@ -149,10 +149,10 @@ export default function ReturnsManager() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            Reverse Logistics & Returns
+            Returns
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Post sales returns, supplier returns, and reverse warehouse stock flows.
+            Parts a customer brought back, and parts you sent back to a supplier.
           </p>
         </div>
         {activeTab === 'customer' && (

@@ -139,11 +139,10 @@ export default function AccountingPortal() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            General Ledger & Vouchers
+            Accounts (Ledger)
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            View real-time Trial Balance sheets, Profit & Loss summaries, and record Journal
-            Entries.
+            Trial balance, profit and loss, every entry by day, and manual entries for your CA.
           </p>
         </div>
         <button
@@ -237,7 +236,7 @@ export default function AccountingPortal() {
               <div className="grid grid-cols-2 gap-6">
                 {/* Revenues */}
                 <div className="space-y-3">
-                  <h3 className="text-sm font-bold text-gray-950 dark:text-white uppercase tracking-wider">
+                  <h3 className="text-sm font-bold text-gray-950 dark:text-white ">
                     Revenues (Credit accounts)
                   </h3>
                   <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2">
@@ -254,7 +253,7 @@ export default function AccountingPortal() {
                 </div>
                 {/* Expenses */}
                 <div className="space-y-3">
-                  <h3 className="text-sm font-bold text-gray-950 dark:text-white uppercase tracking-wider">
+                  <h3 className="text-sm font-bold text-gray-950 dark:text-white ">
                     Expenses (Debit accounts)
                   </h3>
                   <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2">
@@ -410,9 +409,7 @@ export default function AccountingPortal() {
               {/* Entries lines */}
               <div className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-800">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                    Journal Entries
-                  </h4>
+                  <h4 className="text-sm font-bold text-gray-500">Journal Entries</h4>
                   <button
                     type="button"
                     onClick={handleAddEntryLine}

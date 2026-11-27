@@ -70,7 +70,7 @@ export default function StockVerificationManager() {
   };
   return (
     <section className="p-6 space-y-5">
-      <h1 className="text-xl font-bold">Stock verification</h1>
+      <h1 className="text-xl font-bold">Stock count</h1>
       <p>Counts create pending verifications. Review and approve each variance to change stock.</p>
       {canAdjust && (
         <>

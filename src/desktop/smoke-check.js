@@ -307,15 +307,15 @@ export async function runDesktopSmoke(window, backend, failures) {
   }
   for (const [route, title] of [
     ['/inventory', 'Stock'],
-    ['/stock-verification', 'Stock verification'],
+    ['/stock-verification', 'Stock count'],
     ['/assets', 'Fixed assets'],
-    ['/masters', 'Reference masters'],
+    ['/masters', 'Godowns & Masters'],
     ['/purchasing', 'Buy Stock'],
     ['/invoices', 'Bills'],
     ['/supplier-ledger', 'Supplier ledger'],
-    ['/service-history', 'Vehicle Service History'],
+    ['/service-history', 'Service History'],
     ['/expenses', 'Expenses'],
-    ['/technicians', 'Technicians'],
+    ['/technicians', 'Mechanics'],
     ['/settings', 'Settings & Backup'],
     ['/reports', 'Reports & GST'],
   ]) {

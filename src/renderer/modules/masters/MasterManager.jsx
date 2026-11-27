@@ -25,7 +25,7 @@ export default function MasterManager({ resource = 'warehouses' }) {
   const { hasPermission } = usePermissions();
   return (
     <section className="p-6 space-y-5">
-      <h1 className="text-xl font-bold">Reference masters</h1>
+      <h1 className="text-2xl font-bold">Godowns &amp; Masters</h1>
       <nav aria-label="Master types" className="flex flex-wrap gap-2">
         {Object.entries(masterResources)
           .filter(([, config]) => hasPermission(`${config.permission}.read`))

@@ -603,8 +603,8 @@ export default function ReportsManager() {
                 <div className="grid grid-cols-2 gap-6">
                   {/* Revenue / Incomes side */}
                   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 space-y-4 shadow-sm">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-gray-500 border-b pb-2">
-                      Revenue / Trading Accounts
+                    <h4 className="font-bold text-xs  text-gray-500 border-b pb-2">
+                      Money earned (sales)
                     </h4>
                     <div className="space-y-3 min-h-[150px]">
                       {profitLoss.revenue.items.map((item, i) => (
@@ -626,8 +626,8 @@ export default function ReportsManager() {
 
                   {/* Expenses / Spending side */}
                   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 space-y-4 shadow-sm">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-gray-500 border-b pb-2">
-                      Operating Expenses
+                    <h4 className="font-bold text-xs  text-gray-500 border-b pb-2">
+                      Costs and expenses
                     </h4>
                     <div className="space-y-3 min-h-[150px]">
                       {profitLoss.expenses.items.map((item, i) => (
@@ -650,9 +650,7 @@ export default function ReportsManager() {
                   {/* Summary Block */}
                   <div className="col-span-2 bg-gradient-to-r from-brand-600 to-indigo-650 text-white rounded-xl p-6 flex items-center justify-between shadow-md">
                     <div>
-                      <h4 className="text-xs font-semibold uppercase tracking-wider opacity-85">
-                        Net Profit Margin
-                      </h4>
+                      <h4 className="text-sm font-semibold opacity-85">Profit (after all costs)</h4>
                       <p className="text-3xl font-black mt-1">
                         ₹{profitLoss.netProfit?.toFixed(2)}
                       </p>
@@ -710,8 +708,8 @@ export default function ReportsManager() {
                 <div className="grid grid-cols-2 gap-6">
                   {/* Assets Grid */}
                   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 space-y-4 shadow-sm">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-indigo-600 border-b pb-2">
-                      Assets (Use of Funds)
+                    <h4 className="font-bold text-xs  text-indigo-600 border-b pb-2">
+                      What the workshop owns
                     </h4>
                     <div className="space-y-3 min-h-[150px]">
                       {balanceSheet.assets.items.map((item, i) => (
@@ -734,8 +732,8 @@ export default function ReportsManager() {
                   {/* Liabilities + Equity Grid */}
                   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 space-y-4 shadow-sm flex flex-col justify-between">
                     <div>
-                      <h4 className="font-bold text-xs uppercase tracking-wider text-emerald-600 border-b pb-2">
-                        Liabilities & Equity (Source of Funds)
+                      <h4 className="font-bold text-xs  text-emerald-600 border-b pb-2">
+                        What the workshop owes, and owner's money
                       </h4>
                       <div className="space-y-3 min-h-[120px] mt-4">
                         {balanceSheet.liabilities.items.map((item, i) => (

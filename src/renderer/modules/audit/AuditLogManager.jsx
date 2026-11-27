@@ -53,8 +53,8 @@ export default function AuditLogManager() {
   return (
     <div className="space-y-5 p-4 sm:p-6">
       <header>
-        <h1 className="text-2xl font-bold">Audit logs</h1>
-        <p className="text-sm text-gray-500">Review recorded staff actions and changes.</p>
+        <h1 className="text-2xl font-bold">Audit Log</h1>
+        <p className="text-sm text-gray-500">Every change made in the app, who made it and when.</p>
       </header>
       <label className="block max-w-sm text-sm">
         Find audit records
