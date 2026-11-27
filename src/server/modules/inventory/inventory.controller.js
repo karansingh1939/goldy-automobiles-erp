@@ -189,19 +189,6 @@ export class InventoryController {
     }
   };
 
-  receiveTransfer = (req, res, next) => {
-    try {
-      const result = this.inventoryService.receiveTransfer(
-        Number(req.params.id),
-        req.body || {},
-        req.user?.id,
-      );
-      res.status(200).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
-
   cancelTransfer = (req, res, next) => {
     try {
       const result = this.inventoryService.cancelTransfer(Number(req.params.id), req.user?.id);
@@ -244,24 +231,6 @@ export class InventoryController {
   rejectVerification = (req, res, next) => {
     try {
       const result = this.inventoryService.rejectVerification(Number(req.params.id), req.user?.id);
-      res.status(200).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  reserveStock = (req, res, next) => {
-    try {
-      const result = this.inventoryService.reserveStock(req.body || {}, req.user?.id);
-      res.status(201).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  cancelReservation = (req, res, next) => {
-    try {
-      const result = this.inventoryService.cancelReservation(Number(req.params.id), req.user?.id);
       res.status(200).json({ data: result });
     } catch (error) {
       next(error);

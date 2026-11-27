@@ -61,13 +61,6 @@ export function createInventoryRouter(db) {
     controller.rejectVerification,
   );
 
-  router.post('/reservations', requirePermission('inventory.adjust'), controller.reserveStock);
-  router.post(
-    '/reservations/:id/cancel',
-    requirePermission('inventory.adjust'),
-    controller.cancelReservation,
-  );
-
   router.get(
     '/warehouses/:id/permissions',
     requirePermission('warehouses.write'),
@@ -79,11 +72,6 @@ export function createInventoryRouter(db) {
     controller.saveWarehousePermissions,
   );
 
-  router.post(
-    '/transfers/:id/receive',
-    requirePermission('inventory.adjust'),
-    controller.receiveTransfer,
-  );
   router.post(
     '/transfers/:id/cancel',
     requirePermission('inventory.adjust'),

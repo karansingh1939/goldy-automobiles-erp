@@ -697,12 +697,15 @@ export class InventoryService {
         userId,
       });
 
+      // One workshop, one person: a move between godowns arrives at once.
+      // (There is no separate "receive" step on any screen.)
+      const received = this.receiveTransfer(transferId, { receivedQuantity: qty }, userId);
       return {
+        ...received,
         transferId,
         transferNumber: this.db
           .prepare('SELECT transfer_number FROM stock_transfers WHERE id = ?')
           .get(transferId).transfer_number,
-        status: 'PENDING',
         out,
       };
     });
@@ -948,13 +951,8 @@ export class InventoryService {
     });
   }
 
-  getAvailableQuantity(
-    itemId,
-    warehouseId = null,
-    batchId = null,
-    excludeRefTable = null,
-    excludeRefId = null,
-  ) {
+  /** Stock on hand for an item, optionally in one godown or one batch. */
+  getAvailableQuantity(itemId, warehouseId = null, batchId = null) {
     let physicalQty = 0;
     if (batchId) {
       const batch = this.repository.findBatchById(batchId);
@@ -971,113 +969,7 @@ export class InventoryService {
       physicalQty = item ? number(item.current_quantity) : 0;
     }
 
-    let reserveQuery = `
-      SELECT SUM(quantity) AS total 
-      FROM inventory_reservations 
-      WHERE item_id = ? AND status = 'ACTIVE'
-    `;
-    const params = [itemId];
-
-    if (warehouseId) {
-      reserveQuery += ' AND warehouse_id = ?';
-      params.push(warehouseId);
-    }
-    if (batchId) {
-      reserveQuery += ' AND batch_id = ?';
-      params.push(batchId);
-    }
-    if (excludeRefTable && excludeRefId) {
-      reserveQuery += ' AND NOT (reference_table = ? AND reference_id = ?)';
-      params.push(excludeRefTable, excludeRefId);
-    }
-
-    const resRow = this.db.prepare(reserveQuery).get(...params);
-    const reservedQty = number(resRow?.total);
-
-    return Math.max(0, physicalQty - reservedQty);
-  }
-
-  reserveStock(payload, userId) {
-    const {
-      itemId,
-      warehouseId,
-      batchId = null,
-      quantity,
-      referenceTable,
-      referenceId,
-      companyId = 1,
-    } = payload;
-    required(itemId, 'Item');
-    required(warehouseId, 'Warehouse');
-    required(quantity, 'Quantity');
-    required(referenceTable, 'Reference table');
-    required(referenceId, 'Reference ID');
-
-    const qty = number(quantity);
-    if (qty <= 0) {
-      throw new AppError('Quantity must be positive.', 400, 'VALIDATION_ERROR');
-    }
-
-    this.assertWarehousePermission(userId, warehouseId);
-
-    return this.repository.transaction(() => {
-      const available = this.getAvailableQuantity(itemId, warehouseId, batchId);
-      if (qty > available) {
-        throw new AppError(
-          `Insufficient available stock. Requested: ${qty}, Available: ${available}`,
-          400,
-          'INSUFFICIENT_STOCK',
-        );
-      }
-
-      const result = this.db
-        .prepare(
-          `
-        INSERT INTO inventory_reservations (company_id, item_id, warehouse_id, batch_id, quantity, reference_table, reference_id, status, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
-      `,
-        )
-        .run(
-          companyId,
-          itemId,
-          warehouseId,
-          batchId || null,
-          qty,
-          referenceTable,
-          referenceId,
-          userId,
-        );
-
-      const reservationId = result.lastInsertRowid;
-      return this.db
-        .prepare('SELECT * FROM inventory_reservations WHERE id = ?')
-        .get(reservationId);
-    });
-  }
-
-  cancelReservation(reservationId, userId) {
-    return this.repository.transaction(() => {
-      const res = this.db
-        .prepare('SELECT * FROM inventory_reservations WHERE id = ?')
-        .get(reservationId);
-      if (!res) {
-        throw new AppError('Reservation not found.', 404, 'RESERVATION_NOT_FOUND');
-      }
-      if (res.status !== 'ACTIVE') {
-        throw new AppError(
-          `Cannot cancel a reservation with status ${res.status}.`,
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      this.db
-        .prepare(
-          "UPDATE inventory_reservations SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .run(reservationId);
-      return { id: reservationId, status: 'CANCELLED' };
-    });
+    return Math.max(0, physicalQty);
   }
 
   stockIn({
@@ -1210,13 +1102,7 @@ export class InventoryService {
       );
     }
 
-    const available = this.getAvailableQuantity(
-      itemId,
-      warehouseId,
-      batchId,
-      referenceType,
-      referenceId,
-    );
+    const available = this.getAvailableQuantity(itemId, warehouseId, batchId);
     if (available < qty) {
       throw new AppError('Insufficient available stock.', 400, 'INSUFFICIENT_STOCK');
     }
@@ -1266,58 +1152,6 @@ export class InventoryService {
       notes,
       created_by: userId,
     });
-
-    // Automatically consume any active reservation matching this reference (fully or partially)
-    if (referenceType && referenceId) {
-      const activeRes = this.db
-        .prepare(
-          `
-        SELECT id, quantity FROM inventory_reservations
-        WHERE item_id = ? AND warehouse_id = ? AND reference_table = ? AND reference_id = ? AND status = 'ACTIVE'
-        ORDER BY id ASC
-      `,
-        )
-        .all(itemId, warehouseId, referenceType, referenceId);
-
-      let toConsume = qty;
-      for (const res of activeRes) {
-        if (toConsume <= 0) break;
-        if (number(res.quantity) <= toConsume) {
-          this.db
-            .prepare(
-              `
-            UPDATE inventory_reservations 
-            SET status = 'CONSUMED', updated_at = CURRENT_TIMESTAMP 
-            WHERE id = ?
-          `,
-            )
-            .run(res.id);
-          toConsume -= number(res.quantity);
-        } else {
-          this.db
-            .prepare(
-              `
-            UPDATE inventory_reservations 
-            SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP 
-            WHERE id = ?
-          `,
-            )
-            .run(toConsume, res.id);
-
-          this.db
-            .prepare(
-              `
-            INSERT INTO inventory_reservations (company_id, item_id, warehouse_id, batch_id, quantity, reference_table, reference_id, status, created_by)
-            SELECT company_id, item_id, warehouse_id, batch_id, ?, reference_table, reference_id, 'CONSUMED', created_by
-            FROM inventory_reservations WHERE id = ?
-          `,
-            )
-            .run(toConsume, res.id);
-
-          toConsume = 0;
-        }
-      }
-    }
 
     return {
       item: updatedItem,

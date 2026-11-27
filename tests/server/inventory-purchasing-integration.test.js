@@ -131,21 +131,11 @@ test('inventory APIs create items and post stock movements', async () => {
     });
 
     assert.equal(transfer.response.status, 201, JSON.stringify(transfer.body));
-    const transferId = transfer.body.data.transferId;
 
-    // Receive the transfer to complete the workflow
-    const receive = await context.request(`/api/v1/inventory/transfers/${transferId}/receive`, {
-      method: 'POST',
-      headers: authHeaders(token),
-      body: JSON.stringify({
-        received_quantity: 1,
-        notes: 'Received oil filter',
-      }),
-    });
-
-    assert.equal(receive.response.status, 200, JSON.stringify(receive.body));
-    assert.equal(receive.body.data.in.item.current_quantity, 3);
-    assert.equal(receive.body.data.in.batch.quantity, 1);
+    // The move completes at once: the oil store now has the filter.
+    assert.equal(transfer.body.data.status, 'COMPLETED');
+    assert.equal(transfer.body.data.in.item.current_quantity, 3);
+    assert.equal(transfer.body.data.in.batch.quantity, 1);
 
     const valuation = await context.request('/api/v1/inventory/reports/valuation', {
       headers: authHeaders(token),
