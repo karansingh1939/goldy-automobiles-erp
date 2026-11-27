@@ -35,3 +35,39 @@ it('shows cash and bank balances and records owner money in plain words', async 
     ),
   );
 });
+
+it('warns before paying out more cash than there is, without blocking the save', async () => {
+  useAppStore.getState().setToken('test-session', { role: { name: 'Admin' } });
+  vi.spyOn(api, 'get').mockImplementation(async () => ({
+    data: [{ id: 1, name: 'Cash in Hand', kind: 'CASH', balance: 300 }],
+  }));
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MoneyInOut />
+    </QueryClientProvider>,
+  );
+  await screen.findByText('Cash in hand');
+  fireEvent.click(screen.getByText('Money Out'));
+  fireEvent.click(screen.getByText('I took money out for myself'));
+  fireEvent.change(screen.getAllByLabelText('Amount (₹)')[0], { target: { value: '500' } });
+  fireEvent.change(screen.getAllByLabelText('Cash or bank')[0], { target: { value: '1' } });
+  const note = await screen.findByRole('note');
+  expect(note.textContent).toContain('After this it will show');
+  expect(note.textContent).toMatch(/[-−]₹200\.00/);
+  expect(screen.getByText('Save').disabled).toBeFalsy();
+});
+
+it('shows a red Home warning when cash is already below zero', async () => {
+  const { NegativeMoneyBanner } =
+    await import('../../src/renderer/shared/components/MoneyWarning.jsx');
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: [{ id: 1, name: 'Cash in Hand', kind: 'CASH', balance: -450 }],
+  });
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <NegativeMoneyBanner />
+    </QueryClientProvider>,
+  );
+  expect((await screen.findByRole('alert')).textContent).toContain('Money shows below zero');
+  expect(screen.getByRole('link', { name: 'Check Money In / Out' })).toBeTruthy();
+});

@@ -16,7 +16,7 @@ Electron main process: single instance, starts the local API and database, opens
 
 - `createWindow` — Create window.
 
-### `src/desktop/smoke-check.js` (356 lines)
+### `src/desktop/smoke-check.js` (427 lines)
 
 End-to-end desktop smoke test run inside Electron with disposable data: setup, counter sale, supplier bill, dashboard and every main screen.
 
@@ -29,6 +29,8 @@ End-to-end desktop smoke test run inside Electron with disposable data: setup, c
 - `click` — Click.
 - `hasText` — Has text.
 - `request` — Request.
+- `checkPrint` — Prints the current screen to an A4 PDF the way the printer would get it: only the bill shows (no menu), it carries the bill number, and it fits on one page. GOLDY_SMOKE_PRINT_DIR (a temp folder) keeps
+- `visible` — Visible.
 
 ## Server: entry, config and shared code
 
@@ -242,7 +244,7 @@ Loads the starter catalogue of common parts on a new install (not in tests).
 
 ## Server: feature modules
 
-### `src/server/modules/accounting/accounting-report.service.js` (364 lines)
+### `src/server/modules/accounting/accounting-report.service.js` (363 lines)
 
 Trial balance, profit and loss and balance sheet from the journal.
 
@@ -320,7 +322,7 @@ Finds ledger ids by their fixed system key (cash_in_hand, inventory_stock ...) w
 - `getLedgerId` — Resolves the ledger ID for a given company and system key. Uses cached results or queries and caches the lookup on cache miss (lazy loading).
 - `getSystemLedger` — Resolves the entire ledger row for a given company and system key.
 
-### `src/server/modules/accounting/money.service.js` (440 lines)
+### `src/server/modules/accounting/money.service.js` (441 lines)
 
 Money In / Out in plain words: cash and banks, other money in/out, customer refunds, last entries with cancel, opening balances from old books.
 
@@ -754,7 +756,7 @@ GST queries: outward supplies by line, credit notes, input tax, HSN/SAC totals.
 - `amount` — Amount.
 - `hsnSummary` — Dynamic HSN/SAC summary report.
 
-### `src/server/modules/gst/gst.routes.js` (54 lines)
+### `src/server/modules/gst/gst.routes.js` (52 lines)
 
 GST routes: summary, GSTR-1, GSTR-3B, HSN and the GSTR-1 CSV files.
 
@@ -782,23 +784,32 @@ Period handling and shaping of GST summary, GSTR-1, GSTR-3B and HSN reports.
 - `hsnSummary` — Quantity, taxable value and tax per HSN/SAC code.
 - `createGstService` — Create gst service.
 
-### `src/server/modules/gst/gstr1-export.service.js` (304 lines)
+### `src/server/modules/gst/gstr1-export.service.js` (384 lines)
 
 GSTR-1 files for the CA in the GST offline tool layout: B2B, B2C small, credit notes, HSN and documents issued.
 
-- `gstDate` — GSTR-1 files for the CA, in the column layout of the GST offline tool sheets (b2b, b2cs, cdnr/cdnur, hsn, docs). Each section downloads as CSV, which opens directly in Excel. / Byte-order mark so Exce
+- `gstDate` — GSTR-1 files for the CA. Each CSV follows the import template of the GST Offline Tool sheet of the same name (b2b, b2cl, b2cs, cdnr, cdnur, hsn, docs), so it can be imported as it is. The JSON preview
 - `round2` — Round2.
 - `pos` — Pos.
 - `groupBy` — Group by.
+- `addTax` — Adds a line's values (signed: credit notes subtract) to a grouped row.
+- `zeroTax` — Zero tax.
 - `Gstr1ExportService` (class) — Gstr1 export service.
 - `build` — Build.
 - `registered` — Registered.
+- `interState` — Inter state.
+- `originalValue` — Original value.
+- `isLarge` — Is large.
+- `noteOnLarge` — Note on large.
+- `noteRow` — Note row.
+- `hsnFor` — Credit notes reduce the HSN totals of the side (B2B / B2C) they belong to.
+- `add` — Add.
 - `documentsIssued` — Table 13: invoice series issued in the period, including cancelled ones.
 - `series` — Series.
 - `csv` — Csv.
 - `cell` — Cell.
 
-### `src/server/modules/inventory/inventory.controller.js` (202 lines)
+### `src/server/modules/inventory/inventory.controller.js` (211 lines)
 
 Stock API handlers.
 
@@ -819,6 +830,7 @@ Stock API handlers.
 - `getSeedStatus` — Get seed status.
 - `listFixedAssets` — List fixed assets.
 - `createFixedAsset` — Create fixed asset.
+- `cancelFixedAsset` — Cancel fixed asset.
 - `listStockVerifications` — List stock verifications.
 - `verifyStock` — Verify stock.
 - `dashboardStats` — Dashboard stats.
@@ -826,7 +838,7 @@ Stock API handlers.
 - `approveVerification` — Approve verification.
 - `rejectVerification` — Reject verification.
 
-### `src/server/modules/inventory/inventory.repository.js` (574 lines)
+### `src/server/modules/inventory/inventory.repository.js` (576 lines)
 
 Stock queries: items, batches, movements, adjustments, transfers, counts, fixed assets, low stock.
 
@@ -856,13 +868,13 @@ Stock queries: items, batches, movements, adjustments, transfers, counts, fixed 
 - `listFixedAssets` — List fixed assets.
 - `listStockVerifications` — List stock verifications.
 
-### `src/server/modules/inventory/inventory.routes.js` (59 lines)
+### `src/server/modules/inventory/inventory.routes.js` (64 lines)
 
 Stock routes.
 
 - `createInventoryRouter` — Create inventory router.
 
-### `src/server/modules/inventory/inventory.service.js` (1664 lines)
+### `src/server/modules/inventory/inventory.service.js` (1776 lines)
 
 The stock engine: items, batches, stock in/out with weighted average cost, opening stock, adjustments with accounting, godown moves, counts with approval, valuation, reports, fixed assets, starter catalogue and bulk counts.
 
@@ -894,6 +906,10 @@ The stock engine: items, batches, stock in/out with weighted average cost, openi
 - `seedStarter` — Loads the starter catalogue of common parts once.
 - `listFixedAssets` — List fixed assets.
 - `createFixedAsset` — Registers workshop equipment separately from stock for sale.
+- `text` — Text.
+- `cancelFixedAsset` — Wrongly entered equipment is cancelled and its money entry reversed.
+- `equipmentLedgerId` — The "Workshop Equipment" account under Fixed Assets, made on first use.
+- `assetPaymentLedgerId` — Cash, the chosen (or only) bank account, or capital for equipment bought earlier.
 - `listStockVerifications` — List stock verifications.
 - `verifyStock` — Records a stock count as waiting for approval.
 - `approveVerification` — Approves a count and posts the difference as an adjustment.
@@ -1449,7 +1465,7 @@ Screen routes (hash router) behind the sign-in check.
 - `ReferenceMasters` — Reference masters.
 - `App` — App.
 
-### `src/renderer/index.css` (85 lines)
+### `src/renderer/index.css` (91 lines)
 
 Tailwind setup, colours, larger base text for the owner, print size.
 
@@ -1471,12 +1487,11 @@ Accounts (Ledger): trial balance, profit and loss, day book and manual vouchers.
 - `handleEntryChange` — Handle entry change.
 - `handleSubmitVoucher` — Handle submit voucher.
 
-### `src/renderer/modules/accounting/MoneyInOut.jsx` (611 lines)
+### `src/renderer/modules/accounting/MoneyInOut.jsx` (605 lines)
 
 Money In / Out: balances, banks, plain money in/out choices, refunds, last entries with cancel, starting balances.
 
 - `rupees` — Rupees.
-- `useMoneyAccounts` — Use money accounts.
 - `AccountSelect` — Account select.
 - `MoneyForm` — Money form.
 - `set` — Set.
@@ -1539,7 +1554,7 @@ Customers: search, add, edit, delete.
 - `handleSave` — Handle save.
 - `handleDelete` — Handle delete.
 
-### `src/renderer/modules/dashboard/SalesDashboardContainer.jsx` (306 lines)
+### `src/renderer/modules/dashboard/SalesDashboardContainer.jsx` (308 lines)
 
 Home: today at the workshop, shortcuts, key numbers, needs attention, best customers, latest bills.
 
@@ -1594,7 +1609,7 @@ Calls the Home sales API.
 
 - `fetchSalesDashboard` — Fetches Sales Dashboard metrics from the server
 
-### `src/renderer/modules/expenses/ExpenseManager.jsx` (378 lines)
+### `src/renderer/modules/expenses/ExpenseManager.jsx` (389 lines)
 
 Expenses: record, edit, delete, filter and totals.
 
@@ -1624,12 +1639,13 @@ Stock count for a whole godown.
 - `load` — Load.
 - `change` — Change.
 
-### `src/renderer/modules/inventory/FixedAssetManager.jsx` (122 lines)
+### `src/renderer/modules/inventory/FixedAssetManager.jsx` (266 lines)
 
 Fixed assets: workshop equipment register.
 
 - `empty` — Empty.
-- `FixedAssetManager` — Fixed asset manager.
+- `FixedAssetManager` — Workshop tools and machines, kept apart from parts sold to customers.
+- `refreshMoney` — Refresh money.
 - `update` — Update.
 
 ### `src/renderer/modules/inventory/InventoryCatalog.jsx` (114 lines)
@@ -1772,7 +1788,7 @@ GSTR-3B and HSN/SAC detail tables.
 - `GstDetailReports` — Gst detail reports.
 - `dataset` — Dataset.
 
-### `src/renderer/modules/reports/Gstr1Downloads.jsx` (91 lines)
+### `src/renderer/modules/reports/Gstr1Downloads.jsx` (94 lines)
 
 Download the five GSTR-1 files for the CA.
 
@@ -1844,7 +1860,7 @@ Settings & Backup: company, back up now, restore, USB folder, schedule.
 
 - `SettingsPortal` — Settings portal.
 
-### `src/renderer/modules/staff/StaffPay.jsx` (264 lines)
+### `src/renderer/modules/staff/StaffPay.jsx` (270 lines)
 
 Staff & Salary: monthly salary, advances, pay salary.
 
@@ -1969,6 +1985,17 @@ Menu, More tools, Find a screen (Ctrl+P), F-key shortcuts, notices and confirm d
 - `toggleMore` — Toggle more.
 - `handleKeyDown` — Handle key down.
 
+### `src/renderer/shared/components/MoneyWarning.jsx` (82 lines)
+
+Cash and bank balances hook, the "will go below zero" note under payment forms and the red Home warning.
+
+- `rupees` — Rupees.
+- `accountName` — Account name.
+- `useMoneyAccounts` — Cash and bank accounts with their balances (shared cache key 'money-accounts').
+- `payingAccount` — Which account a payment comes out of: cash, the chosen bank, or the only bank when there is just one.
+- `BelowZeroNote` — A plain note under a payment form when paying would take cash or a bank below zero. It does not stop the save: usually money that came in was not entered yet.
+- `NegativeMoneyBanner` — Home screen warning when cash or a bank already shows less than zero.
+
 ### `src/renderer/shared/components/RemoteSelect.jsx` (104 lines)
 
 Search-as-you-type dropdown for customers, items, suppliers and more.
@@ -2027,7 +2054,7 @@ Today's date in local time, shared by the screens and the print page.
 
 - `localDate` — Business dates follow the laptop's calendar; audit timestamps remain UTC.
 
-### `public/print-job-card.html` (641 lines)
+### `public/print-job-card.html` (671 lines)
 
 Printable job card page (layout and print styles).
 
@@ -2068,7 +2095,7 @@ Runs the desktop smoke test in Electron with disposable data.
 
 Hand-written descriptions of core business functions used in docs/file-reference.md.
 
-### `scripts/generate-file-reference.js` (544 lines)
+### `scripts/generate-file-reference.js` (546 lines)
 
 Writes docs/file-reference.md (this list).
 
@@ -2148,3 +2175,4 @@ Applied once each, in order, at start-up (`src/server/database/migrations`). Nev
 - `046_expense_payment_account.sql` — Expenses were always posted as paid in cash. Record which cash or bank account paid each expense (NULL means cash, matching existing rows).
 - `047_staff_pay.sql` — Staff salary and advances for mechanics and other workshop staff.
 - `048_release_sales_order_reservations.sql` — The Sales Orders screen was removed (it could reserve stock but never bill, deliver or cancel an order). Release any stock it still holds so job cards and counter sales can use it, and mark those open orders cancelled.
+- `049_fixed_assets_optional_details.sql` — Workshop equipment: code, supplier and invoice number become optional (old tools often have none), and each purchase records which money paid for it so Cash, Bank and the Balance Sheet stay right. Nothing references fixed_assets, so the table is rebuilt in place.

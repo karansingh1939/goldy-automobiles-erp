@@ -120,7 +120,7 @@ Rules that hold everywhere:
 
 ## 5. Data design
 
-91 tables, created by 46 migrations. The main groups:
+91 tables, created by 47 migrations. The main groups:
 
 | Group             | Main tables                                                                                                                                                                                                                |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -244,12 +244,33 @@ Set a monthly salary, give advances (posted to Staff Advances) and pay
 salary once a month with part of the advance recovered. All of it can be
 undone from Last entries, in the right order.
 
+### Workshop equipment (Fixed assets)
+
+Stock → Fixed assets registers tools and machines. Only the name, date and
+price are needed; the code (`FA-0001`), supplier and invoice are optional.
+"Paid from" posts the money at once: Cash or a bank account (a Payment
+voucher), or "bought before using this app" (a Journal against Capital,
+dated today because old dates have no financial year). The cost plus GST goes
+to the **Workshop Equipment** account under Fixed Assets on the Balance
+Sheet. Cancel reverses the voucher and marks the row cancelled.
+
+### Money below zero
+
+Payment forms (Money Out, Expenses, Staff & Salary, Fixed assets) show a
+note when the payment would take cash or a bank below zero. It does not
+block the save, because usually a receipt was not entered yet. Home shows a
+red warning while any account is below zero (`shared/components/MoneyWarning.jsx`).
+
 ### GST and the CA
 
 Reports & GST:
 
-- five GSTR-1 CSV files (B2B, B2C, credit notes, HSN, documents issued) in
-  the offline tool's layout, with dates as 26-Nov-2026;
+- GSTR-1 CSV files, each in the column layout of the GST Offline Tool sheet
+  of the same name: b2b, b2cl (other-state unregistered bills over ₹1 lakh),
+  b2cs (small B2C by state and rate, less credit notes on them), cdnr, cdnur
+  (credit notes on B2CL bills), HSN for B2B and B2C, and documents issued.
+  Dates read 26-Nov-2026 and places of supply 06-Haryana. The screen preview
+  also shows the tax amounts;
 - GSTR-3B output tax and input tax credit;
 - HSN/SAC totals;
 - a Tally Prime XML file with every voucher;
@@ -346,7 +367,11 @@ Zustand holds sign-in, theme, notices and confirm dialogs.
     temporary database);
   - the screen tests (Vitest).
 - `npm run smoke:desktop` starts the real desktop app with disposable data
-  and drives the main flows. The CI on GitHub (`windows-latest`) runs the same
+  and drives the main flows. It also prints the counter-sale bill, a job card
+  bill and the job card sheet to A4 PDF and fails if one shows the menu or
+  needs a second page (`GOLDY_SMOKE_PRINT_DIR` keeps the PDFs).
+  `npm run pack` then `npm run smoke:packaged` does the same with the built
+  Windows app on a brand-new database, as on a fresh install. The CI on GitHub (`windows-latest`) runs the same
   checks.
 - `npm run docs:reference` rewrites
   [file-reference.md](file-reference.md) after files are added or removed. It

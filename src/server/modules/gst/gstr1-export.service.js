@@ -3,14 +3,17 @@ import { GstService } from './gst.service.js';
 import { stateCodeFor } from '../settings/company-settings.js';
 
 /**
- * GSTR-1 files for the CA, in the column layout of the GST offline tool
- * sheets (b2b, b2cs, cdnr/cdnur, hsn, docs). Each section downloads as CSV,
- * which opens directly in Excel.
+ * GSTR-1 files for the CA. Each CSV follows the import template of the GST
+ * Offline Tool sheet of the same name (b2b, b2cl, b2cs, cdnr, cdnur, hsn,
+ * docs), so it can be imported as it is. The JSON preview also carries the
+ * tax amounts so the figures can be checked on screen first.
  */
 
 // Byte-order mark so Excel opens the CSV as UTF-8 (₹ and Hindi names).
 const BOM = String.fromCharCode(0xfeff);
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** Inter-state bills to unregistered buyers above this go invoice-wise in B2CL. */
+export const B2CL_LIMIT = 100000;
 /** The GST offline tool reads dates as dd-mmm-yyyy, e.g. 26-Nov-2026. */
 const gstDate = (value) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
@@ -33,24 +36,66 @@ function groupBy(rows, keyFn, init, add) {
   return [...map.values()];
 }
 
+/** Adds a line's values (signed: credit notes subtract) to a grouped row. */
+function addTax(acc, row, sign = 1) {
+  acc['Taxable Value'] = round2(acc['Taxable Value'] + sign * Math.abs(row.taxableValue));
+  acc['Integrated Tax'] = round2(acc['Integrated Tax'] + sign * Math.abs(row.igstAmount));
+  acc['Central Tax'] = round2(acc['Central Tax'] + sign * Math.abs(row.cgstAmount));
+  acc['State/UT Tax'] = round2(acc['State/UT Tax'] + sign * Math.abs(row.sgstAmount));
+}
+const zeroTax = () => ({
+  'Taxable Value': 0,
+  'Integrated Tax': 0,
+  'Central Tax': 0,
+  'State/UT Tax': 0,
+  'Cess Amount': 0,
+});
+
+const HSN_COLUMNS = [
+  'HSN',
+  'Description',
+  'UQC',
+  'Total Quantity',
+  'Total Value',
+  'Rate',
+  'Taxable Value',
+  'Integrated Tax Amount',
+  'Central Tax Amount',
+  'State/UT Tax Amount',
+  'Cess Amount',
+];
+
 export const SECTIONS = {
   b2b: {
-    title: 'B2B invoices (customers with GSTIN)',
+    title: 'B2B bills (customers with GSTIN)',
     columns: [
-      'GSTIN of Recipient',
+      'GSTIN/UIN of Recipient',
       'Receiver Name',
       'Invoice Number',
       'Invoice date',
       'Invoice Value',
       'Place Of Supply',
       'Reverse Charge',
+      'Applicable % of Tax Rate',
       'Invoice Type',
+      'E-Commerce GSTIN',
       'Rate',
       'Taxable Value',
-      'Integrated Tax',
-      'Central Tax',
-      'State/UT Tax',
       'Cess Amount',
+    ],
+  },
+  b2cl: {
+    title: 'B2C large (other-state customers without GSTIN, bill over ₹1 lakh)',
+    columns: [
+      'Invoice Number',
+      'Invoice date',
+      'Invoice Value',
+      'Place Of Supply',
+      'Applicable % of Tax Rate',
+      'Rate',
+      'Taxable Value',
+      'Cess Amount',
+      'E-Commerce GSTIN',
     ],
   },
   b2cs: {
@@ -58,59 +103,51 @@ export const SECTIONS = {
     columns: [
       'Type',
       'Place Of Supply',
+      'Applicable % of Tax Rate',
       'Rate',
       'Taxable Value',
-      'Integrated Tax',
-      'Central Tax',
-      'State/UT Tax',
       'Cess Amount',
+      'E-Commerce GSTIN',
     ],
   },
-  cdn: {
-    title: 'Credit notes issued (returns)',
+  cdnr: {
+    title: 'Credit notes to customers with GSTIN',
     columns: [
-      'Registered',
-      'GSTIN of Recipient',
+      'GSTIN/UIN of Recipient',
       'Receiver Name',
       'Note Number',
       'Note Date',
-      'Original Invoice Number',
-      'Note Value',
+      'Note Type',
       'Place Of Supply',
+      'Reverse Charge',
+      'Note Supply Type',
+      'Note Value',
+      'Applicable % of Tax Rate',
       'Rate',
       'Taxable Value',
-      'Integrated Tax',
-      'Central Tax',
-      'State/UT Tax',
+      'Cess Amount',
     ],
   },
-  hsn: {
-    title: 'HSN/SAC summary (split B2B and B2C)',
+  cdnur: {
+    title: 'Credit notes on B2C large bills',
     columns: [
-      'Section',
-      'HSN',
-      'Description',
-      'UQC',
-      'Total Quantity',
+      'UR Type',
+      'Note Number',
+      'Note Date',
+      'Note Type',
+      'Place Of Supply',
+      'Note Value',
+      'Applicable % of Tax Rate',
       'Rate',
       'Taxable Value',
-      'Integrated Tax',
-      'Central Tax',
-      'State/UT Tax',
-      'Total Value',
+      'Cess Amount',
     ],
   },
+  hsn_b2b: { title: 'HSN/SAC summary – B2B', columns: HSN_COLUMNS },
+  hsn_b2c: { title: 'HSN/SAC summary – B2C', columns: HSN_COLUMNS },
   docs: {
     title: 'Documents issued',
-    columns: [
-      'Nature of Document',
-      'Series',
-      'Sr. No. From',
-      'Sr. No. To',
-      'Total Number',
-      'Cancelled',
-      'Net Issued',
-    ],
+    columns: ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled'],
   },
 };
 
@@ -126,120 +163,163 @@ export class Gstr1ExportService {
       throw new AppError('Choose the return period (from and to dates).', 400, 'VALIDATION_ERROR');
     const companyState =
       this.db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
+    const registered = (row) => Boolean(String(row.customerGstin || '').trim());
+    const interState = (row) => Math.abs(Number(row.igstAmount || 0)) > 0;
+
     const invoices = data.filter((row) => row.documentType === 'INVOICE');
     const notes = data.filter((row) => row.documentType === 'CREDIT_NOTE');
-    const registered = (row) => Boolean(String(row.customerGstin || '').trim());
+
+    const documentValue = new Map();
+    for (const row of data)
+      documentValue.set(
+        row.invoiceNumber,
+        round2((documentValue.get(row.invoiceNumber) || 0) + Math.abs(row.lineTotal)),
+      );
+    const originalValue = (number) => {
+      if (!number) return 0;
+      if (documentValue.has(number)) return documentValue.get(number);
+      const found = this.db
+        .prepare(
+          `SELECT grand_total FROM invoices WHERE invoice_number = ?
+           UNION ALL SELECT grand_total FROM direct_invoices WHERE invoice_number = ?`,
+        )
+        .get(number, number);
+      return Number(found?.grand_total || 0);
+    };
+    const isLarge = (row) =>
+      !registered(row) && interState(row) && documentValue.get(row.invoiceNumber) > B2CL_LIMIT;
+    const noteOnLarge = (row) =>
+      !registered(row) && interState(row) && originalValue(row.originalInvoiceNumber) > B2CL_LIMIT;
 
     const b2b = groupBy(
       invoices.filter(registered),
       (row) => `${row.invoiceNumber}|${row.gstRate}`,
       (row) => ({
-        'GSTIN of Recipient': row.customerGstin,
+        'GSTIN/UIN of Recipient': row.customerGstin,
         'Receiver Name': row.customerName,
         'Invoice Number': row.invoiceNumber,
         'Invoice date': gstDate(row.invoiceDate),
-        'Invoice Value': 0,
+        'Invoice Value': documentValue.get(row.invoiceNumber),
         'Place Of Supply': pos(row.placeOfSupply, companyState),
         'Reverse Charge': 'N',
+        'Applicable % of Tax Rate': '',
         'Invoice Type': 'Regular B2B',
+        'E-Commerce GSTIN': '',
         Rate: row.gstRate,
-        'Taxable Value': 0,
-        'Integrated Tax': 0,
-        'Central Tax': 0,
-        'State/UT Tax': 0,
-        'Cess Amount': 0,
+        ...zeroTax(),
       }),
-      (acc, row) => {
-        acc['Taxable Value'] = round2(acc['Taxable Value'] + row.taxableValue);
-        acc['Integrated Tax'] = round2(acc['Integrated Tax'] + row.igstAmount);
-        acc['Central Tax'] = round2(acc['Central Tax'] + row.cgstAmount);
-        acc['State/UT Tax'] = round2(acc['State/UT Tax'] + row.sgstAmount);
-      },
+      (acc, row) => addTax(acc, row),
     );
-    const invoiceValue = new Map();
-    for (const row of invoices)
-      invoiceValue.set(
-        row.invoiceNumber,
-        round2((invoiceValue.get(row.invoiceNumber) || 0) + row.lineTotal),
-      );
-    for (const row of b2b) row['Invoice Value'] = invoiceValue.get(row['Invoice Number']);
 
+    const b2cl = groupBy(
+      invoices.filter(isLarge),
+      (row) => `${row.invoiceNumber}|${row.gstRate}`,
+      (row) => ({
+        'Invoice Number': row.invoiceNumber,
+        'Invoice date': gstDate(row.invoiceDate),
+        'Invoice Value': documentValue.get(row.invoiceNumber),
+        'Place Of Supply': pos(row.placeOfSupply, companyState),
+        'Applicable % of Tax Rate': '',
+        Rate: row.gstRate,
+        'E-Commerce GSTIN': '',
+        ...zeroTax(),
+      }),
+      (acc, row) => addTax(acc, row),
+    );
+
+    // Small B2C bills, less the credit notes given on them, by state and rate.
+    const b2csLines = [
+      ...invoices.filter((row) => !registered(row) && !isLarge(row)),
+      ...notes.filter((row) => !registered(row) && !noteOnLarge(row)),
+    ];
     const b2cs = groupBy(
-      invoices.filter((row) => !registered(row)),
+      b2csLines,
       (row) => `${row.placeOfSupply || companyState}|${row.gstRate}`,
       (row) => ({
         Type: 'OE',
         'Place Of Supply': pos(row.placeOfSupply, companyState),
+        'Applicable % of Tax Rate': '',
         Rate: row.gstRate,
-        'Taxable Value': 0,
-        'Integrated Tax': 0,
-        'Central Tax': 0,
-        'State/UT Tax': 0,
-        'Cess Amount': 0,
+        'E-Commerce GSTIN': '',
+        ...zeroTax(),
       }),
-      (acc, row) => {
-        acc['Taxable Value'] = round2(acc['Taxable Value'] + row.taxableValue);
-        acc['Integrated Tax'] = round2(acc['Integrated Tax'] + row.igstAmount);
-        acc['Central Tax'] = round2(acc['Central Tax'] + row.cgstAmount);
-        acc['State/UT Tax'] = round2(acc['State/UT Tax'] + row.sgstAmount);
-      },
+      (acc, row) => addTax(acc, row, row.documentType === 'CREDIT_NOTE' ? -1 : 1),
     );
 
-    const cdn = groupBy(
-      notes,
+    const noteRow = (row) => ({
+      'Note Number': row.invoiceNumber,
+      'Note Date': gstDate(row.invoiceDate),
+      'Note Type': 'C',
+      'Place Of Supply': pos(row.placeOfSupply, companyState),
+      'Note Value': documentValue.get(row.invoiceNumber),
+      'Applicable % of Tax Rate': '',
+      Rate: row.gstRate,
+      'Original Invoice Number': row.originalInvoiceNumber || '',
+      ...zeroTax(),
+    });
+    const cdnr = groupBy(
+      notes.filter(registered),
       (row) => `${row.invoiceNumber}|${row.gstRate}`,
       (row) => ({
-        Registered: registered(row) ? 'Yes (CDNR)' : 'No (CDNUR)',
-        'GSTIN of Recipient': row.customerGstin || '',
+        'GSTIN/UIN of Recipient': row.customerGstin,
         'Receiver Name': row.customerName,
-        'Note Number': row.invoiceNumber,
-        'Note Date': gstDate(row.invoiceDate),
-        'Original Invoice Number': row.originalInvoiceNumber || '',
-        'Note Value': 0,
-        'Place Of Supply': pos(row.placeOfSupply, companyState),
-        Rate: row.gstRate,
-        'Taxable Value': 0,
-        'Integrated Tax': 0,
-        'Central Tax': 0,
-        'State/UT Tax': 0,
+        'Reverse Charge': 'N',
+        'Note Supply Type': 'Regular B2B',
+        ...noteRow(row),
       }),
-      (acc, row) => {
-        acc['Note Value'] = round2(acc['Note Value'] + Math.abs(row.lineTotal));
-        acc['Taxable Value'] = round2(acc['Taxable Value'] + Math.abs(row.taxableValue));
-        acc['Integrated Tax'] = round2(acc['Integrated Tax'] + Math.abs(row.igstAmount));
-        acc['Central Tax'] = round2(acc['Central Tax'] + Math.abs(row.cgstAmount));
-        acc['State/UT Tax'] = round2(acc['State/UT Tax'] + Math.abs(row.sgstAmount));
-      },
+      (acc, row) => addTax(acc, row),
+    );
+    const cdnur = groupBy(
+      notes.filter(noteOnLarge),
+      (row) => `${row.invoiceNumber}|${row.gstRate}`,
+      (row) => ({ 'UR Type': 'B2CL', ...noteRow(row) }),
+      (acc, row) => addTax(acc, row),
     );
 
-    // Credit notes reduce the HSN totals of the section they belong to.
-    const hsn = groupBy(
-      data,
-      (row) => `${registered(row) ? 'B2B' : 'B2C'}|${row.hsnSac}|${row.gstRate}`,
-      (row) => ({
-        Section: registered(row) ? 'B2B' : 'B2C',
-        HSN: row.hsnSac,
-        Description: row.hsnSac === '9987' ? 'Repair and maintenance services' : row.description,
-        UQC: row.hsnSac === '9987' ? 'NA' : 'NOS-NUMBERS',
-        'Total Quantity': 0,
-        Rate: row.gstRate,
-        'Taxable Value': 0,
-        'Integrated Tax': 0,
-        'Central Tax': 0,
-        'State/UT Tax': 0,
-        'Total Value': 0,
-      }),
-      (acc, row) => {
-        acc['Total Quantity'] = round2(acc['Total Quantity'] + row.quantity);
-        acc['Taxable Value'] = round2(acc['Taxable Value'] + row.taxableValue);
-        acc['Integrated Tax'] = round2(acc['Integrated Tax'] + row.igstAmount);
-        acc['Central Tax'] = round2(acc['Central Tax'] + row.cgstAmount);
-        acc['State/UT Tax'] = round2(acc['State/UT Tax'] + row.sgstAmount);
-        acc['Total Value'] = round2(acc['Total Value'] + row.lineTotal);
-      },
-    );
+    // Credit notes reduce the HSN totals of the side (B2B / B2C) they belong to.
+    const hsnFor = (rows) =>
+      groupBy(
+        rows,
+        (row) => `${row.hsnSac}|${row.gstRate}`,
+        (row) => ({
+          HSN: row.hsnSac,
+          Description: row.hsnSac === '9987' ? 'Repair and maintenance services' : row.description,
+          UQC: row.hsnSac === '9987' ? 'NA' : 'NOS-NUMBERS',
+          'Total Quantity': 0,
+          'Total Value': 0,
+          Rate: row.gstRate,
+          'Taxable Value': 0,
+          'Integrated Tax Amount': 0,
+          'Central Tax Amount': 0,
+          'State/UT Tax Amount': 0,
+          'Cess Amount': 0,
+        }),
+        (acc, row) => {
+          const sign = row.documentType === 'CREDIT_NOTE' ? -1 : 1;
+          const add = (key, value) => {
+            acc[key] = round2(acc[key] + sign * Math.abs(Number(value || 0)));
+          };
+          // Services (SAC 9987) are reported without a quantity.
+          if (row.hsnSac !== '9987') add('Total Quantity', row.quantity);
+          add('Total Value', row.lineTotal);
+          add('Taxable Value', row.taxableValue);
+          add('Integrated Tax Amount', row.igstAmount);
+          add('Central Tax Amount', row.cgstAmount);
+          add('State/UT Tax Amount', row.sgstAmount);
+        },
+      );
 
-    return { filters, b2b, b2cs, cdn, hsn, docs: this.documentsIssued(filters) };
+    return {
+      filters,
+      b2b,
+      b2cl,
+      b2cs,
+      cdnr,
+      cdnur,
+      hsn_b2b: hsnFor(data.filter(registered)),
+      hsn_b2c: hsnFor(data.filter((row) => !registered(row))),
+      docs: this.documentsIssued(filters),
+    };
   }
 
   /** Table 13: invoice series issued in the period, including cancelled ones. */

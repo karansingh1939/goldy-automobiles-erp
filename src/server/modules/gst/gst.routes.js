@@ -3,7 +3,7 @@ import { createAuthService } from '../auth/auth.routes.js';
 import { authenticate, requirePermission } from '../../shared/middleware/auth-middleware.js';
 import { GstController } from './gst.controller.js';
 import { createGstService } from './gst.service.js';
-import { Gstr1ExportService } from './gstr1-export.service.js';
+import { Gstr1ExportService, SECTIONS } from './gstr1-export.service.js';
 
 export function createGstRouter(db) {
   const router = Router();
@@ -26,9 +26,7 @@ export function createGstRouter(db) {
       const built = gstr1Export.build(req.query);
       res.status(200).json({
         filters: built.filters,
-        data: Object.fromEntries(
-          ['b2b', 'b2cs', 'cdn', 'hsn', 'docs'].map((key) => [key, built[key]]),
-        ),
+        data: Object.fromEntries(Object.keys(SECTIONS).map((key) => [key, built[key]])),
       });
     } catch (error) {
       next(error);

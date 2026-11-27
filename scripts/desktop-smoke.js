@@ -56,13 +56,15 @@ child.stdout.on('data', (data) => {
 });
 child.stderr.on('data', (data) => {
   const message = data.toString();
+  const print = message.match(
+    /Print of [a-z-]+ (?:has \d+ pages|does not show the bill|shows the menu)/,
+  );
+  if (print) console.error(`Desktop smoke diagnostic: ${print[0]}.`);
   for (const category of [
     'Missing enabled action',
     'Missing form input',
     'Timed out at',
     'Synthetic API seed',
-    'Confirmed order did not reserve stock',
-    'Sales order did not persist',
     'Renderer runtime errors',
   ]) {
     if (message.includes(category)) console.error(`Desktop smoke diagnostic: ${category}.`);

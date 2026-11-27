@@ -1,4 +1,4 @@
-/* global document, HTMLSelectElement, HTMLInputElement, location */
+/* global document, HTMLSelectElement, HTMLInputElement, location, getComputedStyle */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -170,6 +170,77 @@ export async function runDesktopSmoke(window, backend, failures) {
   if (inventoryMetrics.totalValuation !== 900)
     throw new Error('Synthetic inventory valuation mismatch');
   console.log('SMOKE PASS: counter sale bill, cash payment and stock out');
+
+  /**
+   * Prints the current screen to an A4 PDF the way the printer would get it:
+   * only the bill shows (no menu), it carries the bill number, and it fits on
+   * one page. GOLDY_SMOKE_PRINT_DIR (a temp folder) keeps the PDFs to look at.
+   */
+  async function checkPrint(name, containerId, mustShow) {
+    const dbg = window.webContents.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    await dbg.sendCommand('Emulation.setEmulatedMedia', { media: 'print' });
+    const layout = await execute(
+      (containerId, mustShow) => {
+        const visible = (node) => node && getComputedStyle(node).visibility !== 'hidden';
+        const bill = containerId ? document.getElementById(containerId) : document.body;
+        return {
+          menuHidden: !visible(document.querySelector('nav[aria-label="Main menu"] a')),
+          billShown: visible(bill) && bill.textContent.includes(mustShow),
+        };
+      },
+      containerId,
+      mustShow,
+    );
+    await dbg.sendCommand('Emulation.setEmulatedMedia', { media: '' });
+    if (!layout.billShown) throw new Error(`Print of ${name} does not show the bill`);
+    if (containerId && !layout.menuHidden) throw new Error(`Print of ${name} shows the menu`);
+    const pdf = await window.webContents.printToPDF({ pageSize: 'A4', printBackground: true });
+    const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page(?![a-zA-Z])/g) || []).length;
+    const keep = process.env.GOLDY_SMOKE_PRINT_DIR;
+    if (keep && path.resolve(keep).startsWith(path.resolve(os.tmpdir()))) {
+      fs.mkdirSync(keep, { recursive: true });
+      fs.writeFileSync(path.join(keep, `${name}.pdf`), pdf);
+    }
+    if (pages !== 1) throw new Error(`Print of ${name} has ${pages} pages`);
+    console.log(`SMOKE PASS: ${name} prints on one A4 page without the menu`);
+  }
+  await checkPrint('counter-sale-bill', 'counter-print', sale.invoice_number);
+
+  // A job card bill and the job card sheet given to the customer.
+  const job = (
+    await request('/job-cards', {
+      customer_name: 'Synthetic Print Customer',
+      phone: '9000070001',
+      registration_number: 'HR05SM0001',
+      make: 'Maruti',
+      model: 'Alto',
+      fuel_type: 'Petrol',
+      odometer_reading: 1000,
+      complaint: 'General service',
+      fuel_level: '1/2',
+    })
+  ).data;
+  await request(`/job-cards/${job.id}/labour`, {
+    description: 'General service labour',
+    labour_charge: 800,
+    gst_rate: 18,
+  });
+  const jobBill = (await request(`/job-cards/${job.id}/finalize`, {})).data.invoice;
+  await execute((id) => {
+    location.hash = `/invoices?id=${id}`;
+  }, jobBill.id);
+  await until('job card bill', hasText, jobBill.invoice_number);
+  await checkPrint('job-card-bill', 'invoice-print', jobBill.invoice_number);
+  await execute((url) => {
+    location.href = url;
+  }, `${backend.url}/print-job-card.html?id=${job.id}`);
+  await until('job card sheet', hasText, 'HR05SM0001');
+  await checkPrint('job-card-sheet', null, 'HR05SM0001');
+  await execute((url) => {
+    location.href = url;
+  }, backend.url);
+  await until('back to the app', hasText, 'Start something');
 
   const screenshotDirectory = process.env.GOLDY_SMOKE_SCREENSHOTS;
   if (screenshotDirectory) {

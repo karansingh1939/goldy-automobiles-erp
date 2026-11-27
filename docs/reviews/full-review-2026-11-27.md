@@ -87,13 +87,24 @@ remain readable.
   files with its purpose, every function (about 1,000) and every migration.
   Regenerate it with `npm run docs:reference`.
 
+## Follow-up the same day: the open items
+
+| Item                                                                       | What was done                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fixed Assets asked for a code, supplier and invoice                        | Migration 049 rebuilds the table. Only name, date and price are needed; the code is made (FA-0001).                                                                                                                  |
+| Buying equipment never touched Cash or Bank (found while fixing the above) | "Paid from" Cash / bank / bought earlier now posts to a Workshop Equipment account on the Balance Sheet; Cancel reverses it.                                                                                         |
+| Cash could go below zero silently                                          | Payment forms warn before saving, and Home shows a red warning while it is below zero.                                                                                                                               |
+| GSTR-1 files did not match the offline tool's import sheets                | Columns now match the sheets. Added B2CL (other-state bills over ₹1 lakh to buyers without GSTIN). Credit notes to local buyers without GSTIN now reduce B2CS instead of going to CDNUR. HSN split into B2B and B2C. |
+| Printing untested                                                          | The smoke run prints three layouts to A4 PDF. The job card sheet spilled its signatures onto a second, grey page: fixed. Printed bills are now on white.                                                             |
+| Fresh install untested                                                     | The built Windows app (`npm run pack`) passed the full smoke run on a brand-new database, and an upgrade test keeps equipment entered before migration 049.                                                          |
+
+After the follow-up: 249 backend tests and 83 screen tests pass, plus both
+smoke runs and a click-through of the new screens on a test copy.
+
 ## Still worth knowing
 
-- **Fixed Assets** still asks for a code, supplier and invoice number. The
-  database requires them; relaxing that means rebuilding the table, which
-  isn't worth the risk for a rarely used screen.
-- **Cash can go below zero.** A red warning now shows on Money In / Out when
-  it does.
-- **Your CA should check the GSTR-1 files once** before the first filing.
-- **Still needs a person:** printing on the real printer, a fresh install on
-  the laptop, and your father using it day to day.
+- **Your CA should import one month's GSTR-1 files into the offline tool**
+  before the first filing. The columns follow the tool's sheets, but the
+  official templates could not be downloaded to compare word for word.
+- **Still needs a person:** a page on the real printer, installing the
+  setup file on the workshop laptop, and your father using it day to day.

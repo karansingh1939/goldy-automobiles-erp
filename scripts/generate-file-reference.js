@@ -393,6 +393,8 @@ const PURPOSE = {
     'Sortable table with paging and empty/error states.',
   'src/renderer/shared/components/Layout.jsx':
     'Menu, More tools, Find a screen (Ctrl+P), F-key shortcuts, notices and confirm dialogs.',
+  'src/renderer/shared/components/MoneyWarning.jsx':
+    'Cash and bank balances hook, the "will go below zero" note under payment forms and the red Home warning.',
   'src/renderer/shared/components/RemoteSelect.jsx':
     'Search-as-you-type dropdown for customers, items, suppliers and more.',
   'src/renderer/shared/components/ServerPagination.jsx': 'Previous/next page buttons.',

@@ -68,7 +68,7 @@ See [system design](docs/system-design.md), [every file and function](docs/file-
 
 ## Status and verification
 
-Latest verification (27 November 2026): **246 backend tests + 80 interface tests**, a desktop smoke workflow, and a full hands-on click-through of every screen ([report](docs/reviews/full-review-2026-11-27.md)). See the [issue-by-issue evidence and remaining acceptance gates](docs/reviews/recheck-2026-10-15.md).
+Latest verification (27 November 2026): **249 backend tests + 83 interface tests**, a desktop smoke workflow with print checks, the packaged app on a fresh database, and a full hands-on click-through of every screen ([report](docs/reviews/full-review-2026-11-27.md)). See the [issue-by-issue evidence and remaining acceptance gates](docs/reviews/recheck-2026-10-15.md).
 
 The [audit fixes and current verification](docs/reviews/audit-fixes-2026-10-15.md) cover recovery, sales pricing, returns, payment allocations, backup failure handling and growing-data UI regressions. The earlier 0.2.0 milestone passed 202 backend tests and 35 renderer tests; its historical packaging evidence is in the [publication verification record](docs/reviews/publication-verification-2026-10-11.md). This remains a release candidate: clean-laptop installation/upgrade, a workshop acceptance trial and a real TallyPrime test-company import are release gates. The installer is unsigned.
 

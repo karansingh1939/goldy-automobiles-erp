@@ -82,6 +82,46 @@ it('keeps asset registration failures visible with entered values intact', async
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Duplicate asset SKU');
   expect(screen.getByLabelText('Asset name').value).toBe('Compressor');
 });
+it('registers equipment with just name, date and price, and cancels it after a yes', async () => {
+  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: url.startsWith('/api/v1/inventory/assets')
+      ? [
+          {
+            id: 9,
+            sku: 'FA-0001',
+            asset_name: 'Floor jack',
+            purchase_date: '2026-11-21',
+            purchase_cost: 4000,
+            gst_amount: 720,
+            paid_from: 'CASH',
+            status: 'ACTIVE',
+          },
+        ]
+      : [],
+    pagination: { totalPages: 1 },
+  }));
+  const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+  mount(<FixedAssetManager />);
+  fireEvent.change(screen.getByLabelText('Asset name'), { target: { value: 'Grinder' } });
+  fireEvent.change(screen.getByLabelText('Price'), { target: { value: '2500' } });
+  expect(screen.getByText('₹2500.00 will be taken from cash.')).toBeTruthy();
+  fireEvent.submit(screen.getByRole('button', { name: 'Register asset' }).closest('form'));
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      '/api/v1/inventory/assets',
+      expect.objectContaining({
+        asset_name: 'Grinder',
+        purchase_cost: 2500,
+        paid_from: 'CASH',
+        supplier_id: null,
+        sku: '',
+      }),
+    ),
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Cancel Floor jack' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel' }));
+  await waitFor(() => expect(post).toHaveBeenCalledWith('/api/v1/inventory/assets/9/cancel', {}));
+});
 it('preserves cleared optional warehouse fields when updating a reference master', async () => {
   vi.spyOn(api, 'get').mockResolvedValue({
     data: [{ id: 7, name: 'Annex', code: 'AN', address: 'Old', is_active: 1 }],

@@ -1256,52 +1256,96 @@ export class InventoryService {
     };
   }
 
+  /**
+   * Registers workshop equipment (not stock for sale). Only the name, date and
+   * price are needed; a code is made up when left blank. The money side is
+   * posted at once: paid from Cash, from a bank account, or bought before
+   * using this app (then it is added to the owner's capital).
+   */
   createFixedAsset(payload, userId) {
-    required(payload.asset_name, 'Asset Name');
-    required(payload.sku, 'SKU');
-    required(payload.supplier_id, 'Supplier');
-    required(payload.invoice_number, 'Invoice Number');
-    required(payload.purchase_date, 'Purchase Date');
-    required(payload.purchase_cost, 'Purchase Cost');
+    required(payload.asset_name, 'Equipment name');
+    required(payload.purchase_date, 'Date bought');
+    required(payload.purchase_cost, 'Price');
 
-    const skuVal = String(payload.sku).trim().toUpperCase();
-    if (!/^[A-Z0-9_-]+$/.test(skuVal)) {
-      throw new AppError('SKU must be alphanumeric.', 400, 'VALIDATION_ERROR');
+    let sku = payload.sku ? String(payload.sku).trim().toUpperCase() : '';
+    if (sku && !/^[A-Z0-9_-]+$/.test(sku)) {
+      throw new AppError('Code can only have letters, numbers, - and _.', 400, 'VALIDATION_ERROR');
     }
 
-    const supplierId = Number.parseInt(payload.supplier_id, 10);
-    if (!this.repository.findSupplierById(supplierId)) {
-      throw new AppError('Supplier was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
+    let supplierId = null;
+    if (payload.supplier_id) {
+      supplierId = Number.parseInt(payload.supplier_id, 10);
+      if (!this.repository.findSupplierById(supplierId)) {
+        throw new AppError('Supplier was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
+      }
     }
 
     const cost = money(payload.purchase_cost);
-    if (cost < 0) {
-      throw new AppError('Purchase cost cannot be negative.', 400, 'VALIDATION_ERROR');
-    }
-
     const gstAmount = money(payload.gst_amount || 0);
-    if (gstAmount < 0) {
-      throw new AppError('GST amount cannot be negative.', 400, 'VALIDATION_ERROR');
+    if (!(cost >= 0) || !(gstAmount >= 0)) {
+      throw new AppError('Price and GST cannot be below zero.', 400, 'VALIDATION_ERROR');
     }
 
-    const data = {
-      asset_name: String(payload.asset_name).trim(),
-      sku: skuVal,
-      category: payload.category ? String(payload.category).trim() : 'Equipment',
-      supplier_id: supplierId,
-      invoice_number: String(payload.invoice_number).trim(),
-      purchase_date: String(payload.purchase_date).trim(),
-      purchase_cost: cost,
-      gst_amount: gstAmount,
-      serial_number: payload.serial_number ? String(payload.serial_number).trim() : null,
-      warranty_info: payload.warranty_info ? String(payload.warranty_info).trim() : null,
-      notes: payload.notes ? String(payload.notes).trim() : null,
-      created_by: userId,
-    };
+    const paidFrom = String(payload.paid_from || 'CASH').toUpperCase();
+    if (!['CASH', 'BANK', 'EARLIER'].includes(paidFrom)) {
+      throw new AppError('Choose how it was paid.', 400, 'VALIDATION_ERROR');
+    }
+
+    const text = (value) => (value ? String(value).trim() : null);
 
     try {
       return this.repository.transaction(() => {
-        const asset = this.repository.createFixedAsset(data);
+        if (!sku) {
+          let next = this.db.prepare('SELECT COUNT(*) AS n FROM fixed_assets').get().n + 1;
+          sku = `FA-${String(next).padStart(4, '0')}`;
+          while (this.db.prepare('SELECT 1 FROM fixed_assets WHERE sku = ?').get(sku)) {
+            next += 1;
+            sku = `FA-${String(next).padStart(4, '0')}`;
+          }
+        }
+        const created = this.repository.createFixedAsset({
+          asset_name: String(payload.asset_name).trim(),
+          sku,
+          category: text(payload.category) || 'Equipment',
+          supplier_id: supplierId,
+          invoice_number: text(payload.invoice_number),
+          purchase_date: String(payload.purchase_date).trim(),
+          purchase_cost: cost,
+          gst_amount: gstAmount,
+          serial_number: text(payload.serial_number),
+          warranty_info: text(payload.warranty_info),
+          notes: text(payload.notes),
+          paid_from: paidFrom,
+          created_by: userId,
+        });
+
+        const total = money(cost + gstAmount);
+        if (total > 0) {
+          const voucher = this.postingEngine.post({
+            companyId: 1,
+            voucherType: paidFrom === 'EARLIER' ? 'Journal' : 'Payment',
+            // Old equipment may predate every financial year in the app, so it
+            // joins the books today; the record keeps its real purchase date.
+            voucherDate: paidFrom === 'EARLIER' ? localDate() : created.purchase_date,
+            referenceTable: 'fixed_assets',
+            referenceId: created.id,
+            narration: `Equipment bought: ${created.asset_name}${paidFrom === 'EARLIER' ? ' (bought earlier)' : ''}`,
+            created_by: userId,
+            entries: [
+              { ledgerId: this.equipmentLedgerId(), type: 'DEBIT', amount: total },
+              {
+                ledgerId: this.assetPaymentLedgerId(paidFrom, payload.payment_account_id),
+                type: 'CREDIT',
+                amount: total,
+              },
+            ],
+          });
+          this.db
+            .prepare('UPDATE fixed_assets SET voucher_id = ? WHERE id = ?')
+            .run(voucher.voucherId, created.id);
+        }
+
+        const asset = this.repository.findFixedAssetById(created.id);
         this.auditRepository.create({
           userId,
           action: 'CREATE',
@@ -1314,6 +1358,74 @@ export class InventoryService {
     } catch (error) {
       throw normalizeDatabaseError(error);
     }
+  }
+
+  /** Wrongly entered equipment is cancelled and its money entry reversed. */
+  cancelFixedAsset(id, userId) {
+    const asset = this.repository.findFixedAssetById(Number(id));
+    if (!asset) throw new AppError('Equipment not found.', 404, 'NOT_FOUND');
+    if (asset.status === 'CANCELLED') {
+      throw new AppError('This equipment is already cancelled.', 400, 'ALREADY_CANCELLED');
+    }
+    return this.repository.transaction(() => {
+      if (asset.voucher_id) this.postingEngine.deleteVoucher(1, asset.voucher_id);
+      this.db
+        .prepare(
+          "UPDATE fixed_assets SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .run(asset.id);
+      this.auditRepository.create({
+        userId,
+        action: 'CANCEL',
+        entityType: 'fixed_assets',
+        entityId: asset.id,
+        oldValue: asset,
+      });
+      return this.repository.findFixedAssetById(asset.id);
+    });
+  }
+
+  /** The "Workshop Equipment" account under Fixed Assets, made on first use. */
+  equipmentLedgerId() {
+    const found = this.db
+      .prepare("SELECT id FROM ledgers WHERE company_id = 1 AND system_key = 'workshop_equipment'")
+      .get();
+    if (found) return found.id;
+    const id = Number(
+      this.db
+        .prepare(
+          `INSERT INTO ledgers (company_id, name, group_id, opening_balance, nature, is_system, system_key)
+           VALUES (1, 'Workshop Equipment', 3, 0, 'Debit', 1, 'workshop_equipment')`,
+        )
+        .run().lastInsertRowid,
+    );
+    this.db
+      .prepare(
+        'INSERT OR IGNORE INTO ledger_balances (company_id, ledger_id, running_balance) VALUES (1, ?, 0)',
+      )
+      .run(id);
+    return id;
+  }
+
+  /** Cash, the chosen (or only) bank account, or capital for equipment bought earlier. */
+  assetPaymentLedgerId(paidFrom, accountId) {
+    const resolver = this.postingEngine.ledgerResolver;
+    if (paidFrom === 'CASH') return resolver.getLedgerId(1, 'cash_in_hand');
+    if (paidFrom === 'EARLIER') return resolver.getLedgerId(1, 'capital_account');
+    const banks = this.db
+      .prepare(
+        "SELECT id FROM ledgers WHERE company_id = 1 AND (system_key = 'hdfc_bank' OR system_key LIKE 'bank_%') ORDER BY id",
+      )
+      .all();
+    const chosen = accountId
+      ? banks.find((bank) => bank.id === Number(accountId))
+      : banks.length === 1
+        ? banks[0]
+        : null;
+    if (!chosen) {
+      throw new AppError('Choose which bank account paid for it.', 400, 'BANK_ACCOUNT_REQUIRED');
+    }
+    return chosen.id;
   }
 
   listStockVerifications(query) {

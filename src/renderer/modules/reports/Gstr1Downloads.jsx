@@ -5,8 +5,11 @@ import { useAppStore } from '../../shared/store/use-app-store.js';
 const FILES = [
   ['b2b', 'B2B bills (customers with GSTIN)'],
   ['b2cs', 'B2C bills (walk-in customers)'],
-  ['cdn', 'Credit notes (returns)'],
-  ['hsn', 'HSN / SAC summary'],
+  ['b2cl', 'B2C large bills (other state, over ₹1 lakh)'],
+  ['cdnr', 'Credit notes to customers with GSTIN'],
+  ['cdnur', 'Credit notes on B2C large bills'],
+  ['hsn_b2b', 'HSN / SAC summary – B2B'],
+  ['hsn_b2c', 'HSN / SAC summary – B2C'],
   ['docs', 'Documents issued'],
 ];
 

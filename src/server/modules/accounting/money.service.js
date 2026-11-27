@@ -46,6 +46,7 @@ const CANCEL_ELSEWHERE = {
   customer_returns: 'Returns',
   supplier_returns: 'Returns',
   stock_adjustments: 'Stock',
+  fixed_assets: 'Fixed assets',
 };
 
 const roundMoney = (value) => Math.round(Number(value) * 100) / 100;

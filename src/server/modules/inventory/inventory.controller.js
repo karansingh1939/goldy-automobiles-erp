@@ -147,6 +147,15 @@ export class InventoryController {
     }
   };
 
+  cancelFixedAsset = (req, res, next) => {
+    try {
+      const asset = this.inventoryService.cancelFixedAsset(req.params.id, req.user?.id);
+      res.status(200).json({ data: asset });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   listStockVerifications = (req, res, next) => {
     try {
       res.status(200).json(this.inventoryService.listStockVerifications(req.query));

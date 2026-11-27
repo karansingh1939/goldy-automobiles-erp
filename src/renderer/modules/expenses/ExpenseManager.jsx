@@ -6,6 +6,7 @@ import { useAppStore } from '../../shared/store/use-app-store.js';
 import DataTable from '../../shared/components/DataTable.jsx';
 import ServerPagination from '../../shared/components/ServerPagination.jsx';
 import { localDate } from '../../../../public/local-date.js';
+import { BelowZeroNote, payingAccount } from '../../shared/components/MoneyWarning.jsx';
 import {
   decodeExpenseDescription,
   encodeExpenseDescription,
@@ -257,6 +258,16 @@ export default function ExpenseManager() {
                     ))}
                 </select>
               </label>
+            )}
+            {!selected && (
+              <BelowZeroNote
+                className="md:col-span-2"
+                amount={form.amount}
+                account={payingAccount(moneyAccounts.data?.data || [], {
+                  cash: form.payment_mode === 'CASH',
+                  bankId: form.payment_account_id,
+                })}
+              />
             )}
             <label>
               Expense notes

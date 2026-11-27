@@ -443,6 +443,7 @@ export class InventoryRepository {
         serial_number,
         warranty_info,
         notes,
+        paid_from,
         created_by
       )
       VALUES (
@@ -457,6 +458,7 @@ export class InventoryRepository {
         @serial_number,
         @warranty_info,
         @notes,
+        @paid_from,
         @created_by
       )
     `,
@@ -471,7 +473,7 @@ export class InventoryRepository {
         `
       SELECT fixed_assets.*, suppliers.name AS supplier_name
       FROM fixed_assets
-      JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
+      LEFT JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
       WHERE fixed_assets.id = ?
     `,
       )
@@ -495,7 +497,7 @@ export class InventoryRepository {
         `
       SELECT fixed_assets.*, suppliers.name AS supplier_name
       FROM fixed_assets
-      JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
+      LEFT JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
       ${where}
       ORDER BY fixed_assets.id DESC
       LIMIT ? OFFSET ?
@@ -508,7 +510,7 @@ export class InventoryRepository {
         `
       SELECT COUNT(*) AS count
       FROM fixed_assets
-      JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
+      LEFT JOIN suppliers ON suppliers.id = fixed_assets.supplier_id
       ${where}
     `,
       )

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../shared/api/api-client.js';
 import { useAppStore } from '../../shared/store/use-app-store.js';
 import { localDate } from '../../../../public/local-date.js';
+import { BelowZeroNote } from '../../shared/components/MoneyWarning.jsx';
 
 const input =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-base dark:border-gray-700 dark:bg-gray-800';
@@ -115,6 +116,11 @@ function PayForm({ staff, kind, accounts, month, onDone }) {
       {kind === 'SALARY' && (
         <p className="text-base font-semibold sm:col-span-2">Hand over: {rupees(net)}</p>
       )}
+      <BelowZeroNote
+        className="sm:col-span-2"
+        account={accounts.find((account) => String(account.id) === String(form.accountId))}
+        amount={kind === 'SALARY' ? net : form.amount}
+      />
       <div className="flex gap-2 sm:col-span-2">
         <button
           type="submit"

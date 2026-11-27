@@ -9,6 +9,7 @@ import { TopCustomersCard } from './components/TopCustomersCard.jsx';
 import { TopServicesCard } from './components/TopServicesCard.jsx';
 import { RecentSalesTable } from './components/RecentSalesTable.jsx';
 import { BackupHealthBanner } from './components/BackupHealthBanner.jsx';
+import { NegativeMoneyBanner } from '../../shared/components/MoneyWarning.jsx';
 import {
   AlertTriangle,
   UserPlus,
@@ -192,6 +193,7 @@ export default function SalesDashboardContainer() {
   return (
     <main className="max-w-7xl mx-auto p-6 space-y-6">
       <BackupHealthBanner />
+      <NegativeMoneyBanner />
       <DateFilterHeader
         date={date}
         onDateChange={setDate}

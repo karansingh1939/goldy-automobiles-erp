@@ -1,5 +1,13 @@
 # Release Notes - GOLDY AUTOMOBILE ERP
 
+## Unreleased — open items closed, 27 November 2026
+
+- Fixed assets: only name, date and price needed (code made automatically); "Paid from" cash, bank or bought earlier now updates Cash/Bank and a Workshop Equipment account on the Balance Sheet; Cancel button. Migration 049.
+- Payment forms warn when cash or a bank would go below zero; Home shows a red warning while it is.
+- GSTR-1 files follow the GST Offline Tool sheets: new B2CL and CDNUR handling, B2CS net of credit notes, HSN split B2B/B2C.
+- Printing: job card fits one A4 page with signatures; printed pages are white. The smoke run now checks three print layouts.
+- Verification: 249 backend tests, 83 renderer tests; the desktop and packaged Windows app pass the smoke run (with print checks) on a fresh database.
+
 ## Unreleased — full review and clean-up, 27 November 2026
 
 - New: Counter Sale screen (bill without a job card, walk-in or named customer, cash/UPI/card/credit, print, cancel).

@@ -36,6 +36,11 @@ export function createInventoryRouter(db) {
   router.get('/reports/low-stock', requirePermission('inventory.read'), controller.lowStock);
   router.get('/assets', requirePermission('inventory.read'), controller.listFixedAssets);
   router.post('/assets', requirePermission('inventory.write'), controller.createFixedAsset);
+  router.post(
+    '/assets/:id/cancel',
+    requirePermission('inventory.write'),
+    controller.cancelFixedAsset,
+  );
 
   router.get(
     '/verifications',
