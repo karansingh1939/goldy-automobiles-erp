@@ -1,5 +1,16 @@
 # Release Notes - GOLDY AUTOMOBILE ERP
 
+## Unreleased — full review and clean-up, 27 November 2026
+
+- New: Counter Sale screen (bill without a job card, walk-in or named customer, cash/UPI/card/credit, print, cancel).
+- New: Money In / Out "Last entries" with Cancel; refund a customer's advance.
+- New: send parts back to a supplier; cancel draft returns; reject warranty claims.
+- Fixed: godown moves now arrive (stock no longer vanishes); bulk counts post to the accounts; supplier returns lower the Supplier Ledger; payment while billing pays that bill; paid counter bills can be cancelled; expired warranties are marked; opening stock batch is optional.
+- Short numbers for orders, claims, counts, moves and adjustments (e.g. WC/26-27/0001).
+- Removed about 6,900 lines that no screen used: Sales Orders, stock reservations, demo mode, loyalty/referrals/promotions, duplicate supplier, purchase-bill and purchase-return APIs, debug and other unused endpoints. Migration 048 releases stock held by old sales orders.
+- Docs: [system design](system-design.md) and a generated [reference of every file and function](file-reference.md) (`npm run docs:reference`).
+- Verification: 246 backend tests, 80 renderer tests, desktop smoke, full click-through. Details: [full review](reviews/full-review-2026-11-27.md).
+
 ## Unreleased — hands-on click-through fixes, 26 November 2026
 
 - Supplier payments from Money Out now lower the supplier's balance on the Supplier Ledger (they reached the accounts but not that screen).
