@@ -64,7 +64,7 @@ The backend tests run under Electron's embedded Node runtime so SQLite uses the 
 - Applied migrations are immutable. Startup checks database integrity; backups and restore retain recovery copies.
 - Business dates follow the workshop laptop's local calendar; audit timestamps remain UTC.
 
-See [architecture](docs/architecture.md), [administrator guide](docs/admin-guide.md), [security](docs/security.md) and [release notes](docs/release-notes.md).
+See [system design](docs/system-design.md), [every file and function](docs/file-reference.md), [architecture conventions](docs/architecture.md), [administrator guide](docs/admin-guide.md), [security](docs/security.md) and [release notes](docs/release-notes.md).
 
 ## Status and verification
 

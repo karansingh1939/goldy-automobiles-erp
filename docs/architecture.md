@@ -1,5 +1,7 @@
 # Architecture and development conventions
 
+For the full picture (runtime, data design, flows, screens map) see [system-design.md](system-design.md); every file and function is listed in [file-reference.md](file-reference.md).
+
 ## Runtime
 
 The Electron main process in `src/desktop/main.js` owns the local API lifetime. It waits for database initialization and the HTTP listener before loading the application. Only one desktop instance runs. Closing the app stops the backup scheduler, closes the listener and closes SQLite.
@@ -10,7 +12,7 @@ The backend binds to loopback only. The renderer has no Node integration and use
 
 Feature folders own their HTTP routes, controllers, services and repositories. Controllers translate HTTP requests/responses; services validate domain rules and orchestrate transactions; repositories own persistent queries. Keep stock movements and accounting postings within the owning service transaction.
 
-The sales module separates quotation/revision rules, order reservation/fulfillment and shipment invoicing into focused services. They share stored tax basis and line pricing; `SalesOrderRepository` owns their queries. Customer credit policy is shared across billing paths. These boundaries are enforced by lifecycle regressions. Older modules still containing SQL in services are migration debt, not an alternative convention.
+Counter sales (`accounting/direct-billing.service.js`) and job card bills share stored tax basis, document numbering and the customer credit policy. Payments taken while billing pay that bill; supplier payments and returns also write the Supplier Ledger. Older modules still containing SQL in services are migration debt, not an alternative convention.
 
 `src/server/app.js` composes middleware, feature routers and web assets. `src/server/server.js` exports `startServer()` for desktop startup and can also run as the standalone API entry point. Configuration belongs in `config/env.js`.
 

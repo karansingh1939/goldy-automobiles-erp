@@ -7,7 +7,9 @@ All workshop application screens use React. Old authenticated HTML application U
 | Dashboard                       | `/`                                | Real API metrics and charts                                     |
 | Intake and four charge sections | `/job-cards`                       | JobCardManager, JobCardIntake, JobCardCharges                   |
 | Workshop queue and reminders    | `/workshop`, `/reminders`          | Operational planning and recorded follow-ups                    |
-| Sales bookings                  | `/sales-orders`                    | Warehouse selection, confirmation and reservations              |
+| Counter sale                    | `/counter-sale`                    | Bill without a job card, payment, print and cancel              |
+| Money, dues, staff              | `/money`, `/staff`                 | Money in/out, refunds, last entries with cancel, salary         |
+| Returns and warranties          | `/returns`, `/warranties`          | Customer and supplier returns, claims settle or reject          |
 | Inventory and stock operations  | `/inventory`                       | Catalog, operations, initial counts and reports                 |
 | Physical counts                 | `/stock-verification`              | Single/bulk counts, approval and history                        |
 | Fixed assets                    | `/assets`                          | Asset register and creation                                     |
@@ -16,7 +18,7 @@ All workshop application screens use React. Old authenticated HTML application U
 | Supplier ledger                 | `/supplier-ledger`                 | Date-filtered recorded movements and party balance              |
 | Invoices                        | `/invoices`                        | Invoice details, cancellation and printed tax document          |
 | Vehicle service history         | `/service-history`                 | Searchable vehicle visits and recorded charges                  |
-| Accounts/cash                   | `/accounting`, `/cash-receivables` | Vouchers, ledgers, reconciliation and receivables               |
+| Accounts/cash                   | `/accounting`, `/cash-receivables` | Vouchers, ledgers, receivables and cash count                   |
 | Expenses and technicians        | `/expenses`, `/technicians`        | Entry, summaries, assignment and history                        |
 | GST/financial reports/Tally     | `/reports`                         | Registers, posted input tax, HSN and exports                    |
 | Audit                           | `/audit-logs`                      | Search, action/module/date filters and snapshots                |

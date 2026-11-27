@@ -84,7 +84,7 @@ All views support global quick F-key navigation binds registered in `Layout.jsx`
 
 - `F1`: Dashboard
 - `F2`: Job Cards
-- `F3`: Sales Orders
+- `F3`: Counter Sale
 - `F4`: Inventory Catalog
 - `F5`: Purchasing
 - `F6`: Ledger Sheets

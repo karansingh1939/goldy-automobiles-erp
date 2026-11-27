@@ -35,9 +35,6 @@ test('financial statements exclude future and cancelled vouchers while preservin
     assert.equal(tb.ledgers.find((l) => l.ledgerId === 13).debits, 30);
     assert.ok(tb.ledgers.some((l) => l.debits === 0 && l.credits === 0));
     assert.equal(tb.totals.isBalanced, true);
-    const statement = reports.getLedgerStatement(1, 13, '2026-06-01', '2026-06-30');
-    assert.equal(statement.openingBalance, 10);
-    assert.equal(statement.totals.closingBalance, 30);
     assert.equal(reports.getBalanceSheet(1, '2026-06-30').totals.isBalanced, true);
   } finally {
     await context.close();

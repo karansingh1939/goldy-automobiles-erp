@@ -16,5 +16,5 @@ passes, keep everything simple for a non-technical owner.
 | 4   | Remove remaining unused API routes and their dead service code                  | Done           |
 | 5   | Coverage run; read every file and fix or remove what is not needed              | Done           |
 | 6   | Re-test every screen and button on a throwaway test copy                        | Done           |
-| 7   | Write docs/system-design.md (architecture, data flow, every file and function)  | Pending        |
+| 7   | Write docs/system-design.md (architecture, data flow, every file and function)  | Done           |
 | 8   | `npm run check`, smoke test, commit, push, report                               | Pending        |
