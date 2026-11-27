@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { respondData } from '../../shared/http/respond.js';
+import { IntakeLookupService } from './intake-lookup.service.js';
 import { createAuthService } from '../auth/auth.routes.js';
 import { authenticate, requirePermission } from '../../shared/middleware/auth-middleware.js';
 import { JobCardController } from './job-card.controller.js';
@@ -6,149 +8,20 @@ import { createJobCardService } from './job-card.service.js';
 
 export function createJobCardRouter(db) {
   const router = Router();
-  const authService = createAuthService(db);
   const controller = new JobCardController(createJobCardService(db));
-  const requireAuth = authenticate(authService);
+  router.use(authenticate(createAuthService(db)));
 
-  router.use(requireAuth);
-
-  router.get('/customers/lookup', requirePermission('job_cards.read'), (req, res, next) => {
-    try {
-      const phone = req.query.phone;
-      if (!phone) {
-        return res.status(400).json({ error: { message: 'phone is required.' } });
-      }
-      let cleanPhone = String(phone).replace(/[^0-9]/g, '');
-      if (cleanPhone.length === 12 && cleanPhone.startsWith('91')) {
-        cleanPhone = cleanPhone.slice(2);
-      } else if (cleanPhone.length === 11 && cleanPhone.startsWith('0')) {
-        cleanPhone = cleanPhone.slice(1);
-      }
-
-      let customer = null;
-      if (cleanPhone.length === 10) {
-        customer = db
-          .prepare(
-            `
-          SELECT * FROM customers 
-          WHERE phone = ? 
-             OR phone = ? 
-             OR phone = ? 
-             OR phone = ? 
-             OR replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', '') = ?
-             OR substr(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', ''), -10) = ?
-        `,
-          )
-          .get(
-            cleanPhone,
-            '0' + cleanPhone,
-            '91' + cleanPhone,
-            '+91' + cleanPhone,
-            cleanPhone,
-            cleanPhone,
-          );
-      } else {
-        customer = db
-          .prepare(
-            `
-          SELECT * FROM customers 
-          WHERE replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', '') = ?
-        `,
-          )
-          .get(cleanPhone);
-      }
-
-      if (!customer) {
-        return res.status(200).json({ data: null });
-      }
-
-      const vehicles = db.prepare('SELECT * FROM vehicles WHERE customer_id = ?').all(customer.id);
-      res.status(200).json({ data: { ...customer, vehicles } });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/vehicles/lookup', requirePermission('job_cards.read'), (req, res, next) => {
-    try {
-      const reg = req.query.registration_number;
-      if (!reg) {
-        return res.status(400).json({ error: { message: 'registration_number is required.' } });
-      }
-
-      const regNormalized = String(reg)
-        .replace(/[^a-zA-Z0-9]/g, '')
-        .toUpperCase();
-
-      const vehicle = db
-        .prepare(
-          `
-        SELECT
-          v.*,
-          c.name AS customer_name,
-          c.phone AS customer_phone,
-          c.address AS customer_address,
-          c.city AS customer_city,
-          c.notes AS customer_notes,
-          (SELECT COUNT(*) FROM vehicles WHERE customer_id = c.id) AS customer_vehicle_count,
-          (SELECT COUNT(*) FROM job_cards WHERE customer_id = c.id) AS customer_job_card_count,
-          (SELECT MAX(opened_at) FROM job_cards WHERE customer_id = c.id) AS customer_last_visit_at
-        FROM vehicles v
-        JOIN customers c ON c.id = v.customer_id
-        WHERE v.registration_number_normalized = ?
-           OR replace(replace(replace(replace(v.registration_number, ' ', ''), '-', ''), '_', ''), '/', '') = ?
-      `,
-        )
-        .get(regNormalized, regNormalized);
-
-      if (!vehicle) {
-        return res.status(200).json({ data: null });
-      }
-
-      const totalJobCards = db
-        .prepare('SELECT COUNT(*) AS count FROM job_cards WHERE vehicle_id = ?')
-        .get(vehicle.id).count;
-      const lastJobCard = db
-        .prepare('SELECT * FROM job_cards WHERE vehicle_id = ? ORDER BY id DESC LIMIT 1')
-        .get(vehicle.id);
-      const outstandingBalance = db
-        .prepare(
-          `SELECT COALESCE(SUM(MAX(0, grand_total - amount_paid - COALESCE((
-            SELECT SUM(total_refund_amount) FROM customer_returns
-            WHERE invoice_id=invoices.id AND status='COMPLETED'),0))),0) AS balance
-            FROM invoices WHERE vehicle_id = ? AND status = 'FINALIZED'`,
-        )
-        .get(vehicle.id).balance;
-
-      const lastServiceDate = lastJobCard ? lastJobCard.closed_at || lastJobCard.opened_at : null;
-      const lastOdometer = lastJobCard ? lastJobCard.odometer_reading : vehicle.odometer_reading;
-
-      let nextServiceDate = null;
-      if (lastServiceDate) {
-        const d = new Date(lastServiceDate);
-        d.setMonth(d.getMonth() + 6);
-        nextServiceDate = d.toISOString().slice(0, 10);
-      }
-      const nextServiceOdometer = lastOdometer + 5000;
-
-      res.status(200).json({
-        data: {
-          ...vehicle,
-          vehicleStats: {
-            lastServiceDate,
-            lastOdometer,
-            nextServiceDate,
-            nextServiceOdometer,
-            totalJobCards,
-            lastComplaint: lastJobCard ? lastJobCard.complaint : null,
-            outstandingBalance,
-          },
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
+  const lookups = new IntakeLookupService(db);
+  router.get(
+    '/customers/lookup',
+    requirePermission('job_cards.read'),
+    respondData((req) => lookups.findCustomerByPhone(req.query.phone)),
+  );
+  router.get(
+    '/vehicles/lookup',
+    requirePermission('job_cards.read'),
+    respondData((req) => lookups.findVehicleByRegistration(req.query.registration_number)),
+  );
 
   router.get('/job-cards', requirePermission('job_cards.read'), controller.list);
   router.get('/job-cards/:id', requirePermission('job_cards.read'), controller.get);

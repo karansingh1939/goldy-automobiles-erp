@@ -2,24 +2,7 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { TechnicianRepository } from './technician.repository.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { JobCardRepository } from '../job-cards/job-card.repository.js';
-
-function required(value, label) {
-  if (value === undefined || value === null || value === '') {
-    throw new AppError(`${label} is required.`, 400, 'VALIDATION_ERROR');
-  }
-}
-
-function parseListQuery(query) {
-  const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-  const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
-
-  return {
-    page,
-    pageSize,
-    offset: (page - 1) * pageSize,
-    search: typeof query.search === 'string' ? query.search.trim() : '',
-  };
-}
+import { pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
 
 function normalizeDatabaseError(error) {
   if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -127,7 +110,7 @@ export class TechnicianService {
    * @returns {object} paginated technician payload
    */
   list(query = {}) {
-    const parsed = parseListQuery(query);
+    const parsed = parsePaging(query);
     const activeOnly = query.activeOnly === 'true';
 
     const result = this.repository.list({
@@ -148,12 +131,7 @@ export class TechnicianService {
 
     return {
       data,
-      pagination: {
-        page: parsed.page,
-        pageSize: parsed.pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / parsed.pageSize),
-      },
+      pagination: pageInfo(parsed, result.total),
     };
   }
 
@@ -285,7 +263,7 @@ export class TechnicianService {
    */
   getHistoryAndMetrics(id, query = {}) {
     const technician = this.get(id);
-    const parsed = parseListQuery(query);
+    const parsed = parsePaging(query);
 
     const metrics = this.repository.getMetrics(id);
     const history = this.repository.getServiceHistory(id, {

@@ -2,8 +2,8 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { localDate } from '../../shared/utils/local-date.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { MoneyService } from '../accounting/money.service.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
 
-const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
 const fail = (message, code = 'VALIDATION_ERROR', status = 400) => {
   throw new AppError(message, status, code);
 };

@@ -276,7 +276,7 @@ test('Advanced Inventory Control & Warehouse Operations Sprint 6', async () => {
     assert.ok(auditAdjustment.voucher_id);
 
     // ----------------------------------------------------
-    // 7. VALUATION ENGINES (FIFO, AVCO, BATCH, HISTORICAL)
+    // 7. VALUATION (weighted average, as the accounts)
     // ----------------------------------------------------
     // Fetch valuation reports
     res = await context.request('/api/v1/inventory/reports/valuation?method=AVCO', {
@@ -286,19 +286,12 @@ test('Advanced Inventory Control & Warehouse Operations Sprint 6', async () => {
     assert.equal(res.response.status, 200);
     assert.ok(res.body.totals.value > 0);
 
+    // Only weighted average cost is offered, matching the accounts.
     res = await context.request('/api/v1/inventory/reports/valuation?method=FIFO', {
       method: 'GET',
       headers,
     });
-    assert.equal(res.response.status, 200);
-    assert.ok(res.body.totals.value > 0);
-
-    res = await context.request('/api/v1/inventory/reports/valuation?method=BATCH', {
-      method: 'GET',
-      headers,
-    });
-    assert.equal(res.response.status, 200);
-    assert.ok(res.body.totals.value > 0);
+    assert.equal(res.response.status, 400);
 
     // ----------------------------------------------------
     // 8. STOCK TOTALS MATCH THE BATCHES

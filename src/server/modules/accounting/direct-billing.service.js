@@ -4,10 +4,7 @@ import { createInventoryService } from '../inventory/inventory.service.js';
 import { assertCustomerCreditLimit } from './customer-credit.service.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { releaseDocumentAllocations } from './allocation.service.js';
-
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 /**
  * Service to manage direct (non-job-card) counter billing.
@@ -94,9 +91,6 @@ export class DirectBillingService {
     return roundMoney(totalCost);
   }
 
-  /**
-   * Creates a direct counter invoice.
-   */
   /** The shared customer record used for walk-in counter sales without a name. */
   walkInCustomerId() {
     const existing = this.db
@@ -112,6 +106,42 @@ export class DirectBillingService {
     );
   }
 
+  /** Latest 200 counter bills, optionally for one customer or status. */
+  listDirectInvoices({ customerId, status } = {}, companyId = 1) {
+    let sql = `SELECT di.*, c.name AS customer_name
+      FROM direct_invoices di JOIN customers c ON di.customer_id = c.id
+      WHERE di.company_id = ?`;
+    const params = [companyId];
+    if (customerId) {
+      sql += ' AND di.customer_id = ?';
+      params.push(customerId);
+    }
+    if (status) {
+      sql += ' AND di.status = ?';
+      params.push(status);
+    }
+    return this.db
+      .prepare(`${sql} ORDER BY di.invoice_date DESC, di.id DESC LIMIT 200`)
+      .all(...params);
+  }
+
+  /** One counter bill with its lines. */
+  getDirectInvoice(id, companyId = 1) {
+    const invoice = this.db
+      .prepare('SELECT * FROM direct_invoices WHERE id = ? AND company_id = ?')
+      .get(id, companyId);
+    if (!invoice) throw new AppError('Counter bill not found.', 404, 'NOT_FOUND');
+    const items = this.db
+      .prepare(
+        `SELECT dii.*, ii.item_name, ii.sku, ii.hsn_code
+         FROM direct_invoice_items dii LEFT JOIN inventory_items ii ON dii.item_id = ii.id
+         WHERE dii.direct_invoice_id = ?`,
+      )
+      .all(invoice.id);
+    return { ...invoice, items };
+  }
+
+  /** Makes a counter bill: posts the sale, takes the stock out and books its cost. */
   createDirectInvoice(payload) {
     const {
       companyId = 1,

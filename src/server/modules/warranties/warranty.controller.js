@@ -1,84 +1,56 @@
 import { WarrantyService } from './warranty.service.js';
+import { respond, respondData } from '../../shared/http/respond.js';
+import { AppError } from '../../shared/errors/app-error.js';
 
 export class WarrantyController {
   constructor(db) {
     this.service = new WarrantyService(db);
   }
 
-  registerWarranty = async (req, res, next) => {
-    try {
-      const data = this.service.registerWarranty(req.body);
-      res.status(201).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  registerWarranty = respond((req) => {
+    const data = this.service.registerWarranty(req.body);
+    return { data };
+  }, 201);
 
-  fileClaim = async (req, res, next) => {
-    try {
-      const data = this.service.fileClaim(req.body, req.user?.id || 1);
-      res.status(201).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  fileClaim = respond((req) => {
+    const data = this.service.fileClaim(req.body, req.user?.id || 1);
+    return { data };
+  }, 201);
 
-  settleClaim = async (req, res, next) => {
-    try {
-      const data = this.service.settleClaim(Number(req.params.id), req.body, req.user?.id || 1);
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  settleClaim = respond((req) => {
+    const data = this.service.settleClaim(Number(req.params.id), req.body, req.user?.id || 1);
+    return { data };
+  });
 
-  rejectClaim = async (req, res, next) => {
-    try {
-      const data = this.service.rejectClaim(Number(req.params.id), req.body, req.user?.id || 1);
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  rejectClaim = respond((req) => {
+    const data = this.service.rejectClaim(Number(req.params.id), req.body, req.user?.id || 1);
+    return { data };
+  });
 
-  getWarrantyRegistrationById = async (req, res, next) => {
-    try {
-      const data = this.service.repository.findWarrantyRegistrationById(Number(req.params.id));
-      if (!data) {
-        return res.status(404).json({ error: { message: 'Warranty registration not found.' } });
-      }
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  getWarrantyRegistrationById = respondData((req) => {
+    const data = this.service.repository.findWarrantyRegistrationById(Number(req.params.id));
+    if (!data) throw new AppError('Warranty registration not found.', 404, 'NOT_FOUND');
+    return data;
+  });
 
-  listWarrantyRegistrations = async (req, res, next) => {
-    try {
-      const query = {
-        companyId: req.query.companyId ? Number(req.query.companyId) : 1,
-        customerId: req.query.customerId ? Number(req.query.customerId) : undefined,
-        vehicleId: req.query.vehicleId ? Number(req.query.vehicleId) : undefined,
-        itemId: req.query.itemId ? Number(req.query.itemId) : undefined,
-        status: req.query.status,
-      };
-      const data = this.service.repository.listWarrantyRegistrations(query);
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  listWarrantyRegistrations = respond((req) => {
+    const query = {
+      companyId: req.query.companyId ? Number(req.query.companyId) : 1,
+      customerId: req.query.customerId ? Number(req.query.customerId) : undefined,
+      vehicleId: req.query.vehicleId ? Number(req.query.vehicleId) : undefined,
+      itemId: req.query.itemId ? Number(req.query.itemId) : undefined,
+      status: req.query.status,
+    };
+    const data = this.service.repository.listWarrantyRegistrations(query);
+    return { data };
+  });
 
-  listWarrantyClaims = async (req, res, next) => {
-    try {
-      const query = {
-        companyId: req.query.companyId ? Number(req.query.companyId) : 1,
-        status: req.query.status,
-      };
-      const data = this.service.repository.listWarrantyClaims(query);
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  listWarrantyClaims = respond((req) => {
+    const query = {
+      companyId: req.query.companyId ? Number(req.query.companyId) : 1,
+      status: req.query.status,
+    };
+    const data = this.service.repository.listWarrantyClaims(query);
+    return { data };
+  });
 }

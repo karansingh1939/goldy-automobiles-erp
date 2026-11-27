@@ -1,8 +1,5 @@
 import { AppError } from '../../shared/errors/app-error.js';
-
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 const invoiceCredits = `(SELECT COALESCE(SUM(total_refund_amount), 0) FROM customer_returns
   WHERE invoice_id = invoices.id AND status = 'COMPLETED')`;

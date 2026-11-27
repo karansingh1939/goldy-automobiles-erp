@@ -40,10 +40,7 @@ export function createApp({ db: rawDb = getDatabase(), backupScheduler } = {}) {
       get(target, prop) {
         const activeDb = isGlobalDb ? getDatabase() : rawDb;
         const value = Reflect.get(activeDb, prop);
-        if (typeof value === 'function') {
-          return value.bind(activeDb);
-        }
-        return value;
+        return typeof value === 'function' ? value.bind(activeDb) : value;
       },
       set(target, prop, value) {
         const activeDb = isGlobalDb ? getDatabase() : rawDb;
@@ -71,68 +68,21 @@ export function createApp({ db: rawDb = getDatabase(), backupScheduler } = {}) {
   );
   app.use(express.json({ limit: '1mb' }));
 
-  const authRepository = new AuthRepository(db);
-  const authService = new AuthService(authRepository);
+  const authService = new AuthService(new AuthRepository(db));
 
-  // Centralized authentication page protection middleware
+  // Pages other than the app shell (the printable job card) need a signed-in session cookie.
   app.use((req, res, next) => {
-    const filePath = req.path;
-    const isHtml = filePath.endsWith('.html') && filePath !== '/index.html';
-    const isRoot = filePath === '/';
-
-    if (isHtml || isRoot) {
-      const cookieHeader = req.headers.cookie || '';
-      const match = cookieHeader.match(/goldy_session_token=([^;]+)/);
-      const token = match ? match[1] : null;
-
-      let user = null;
-      if (token) {
-        try {
-          user = authService.getUserByToken(token);
-        } catch (e) {
-          // Treat invalid token as unauthenticated
-        }
-      }
-
-      if (isRoot) return next();
-
-      if (isHtml) {
-        if (!user) {
-          return res.redirect('/index.html');
-        }
-        // Enforce cache control on protected pages
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-        return next();
-      }
+    if (!req.path.endsWith('.html') || req.path === '/index.html') return next();
+    const token = /goldy_session_token=([^;]+)/.exec(req.headers.cookie || '')?.[1];
+    let user = null;
+    try {
+      user = token ? authService.getUserByToken(token) : null;
+    } catch {
+      // an expired or unknown token counts as signed out
     }
-
+    if (!user) return res.redirect('/index.html');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     return next();
-  });
-
-  const retiredPages = {
-    '/audit-logs.html': '/audit-logs',
-    '/tally-export.html': '/reports',
-    '/dashboard.html': '/',
-    '/job-cards.html': '/job-cards',
-    '/invoices.html': '/invoices',
-    '/inventory.html': '/inventory',
-    '/masters.html': '/masters',
-    '/stock-verification.html': '/stock-verification',
-    '/assets.html': '/assets',
-    '/purchasing.html': '/purchasing',
-    '/supplier-ledger.html': '/supplier-ledger',
-    '/service-history.html': '/service-history',
-    '/expenses.html': '/expenses',
-    '/technicians.html': '/technicians',
-    '/gst-reports.html': '/reports',
-    '/settings.html': '/settings',
-  };
-  app.get(Object.keys(retiredPages), (req, res) => {
-    const params = new URLSearchParams();
-    for (const key of ['id', 'vehicleId', 'resource'])
-      if (typeof req.query[key] === 'string') params.set(key, req.query[key]);
-    const query = params.size ? `?${params}` : '';
-    res.redirect(`/index.html#${retiredPages[req.path]}${query}`);
   });
   app.use(express.static(publicDir));
 

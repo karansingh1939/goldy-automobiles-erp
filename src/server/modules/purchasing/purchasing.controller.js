@@ -1,59 +1,27 @@
+import { respond, respondData } from '../../shared/http/respond.js';
+
 export class PurchasingController {
   constructor(purchasingService) {
     this.purchasingService = purchasingService;
   }
 
-  listOrders = (req, res, next) => {
-    try {
-      res.status(200).json(this.purchasingService.listOrders(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  listOrders = respond((req) => this.purchasingService.listOrders(req.query));
 
-  createOrder = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.purchasingService.createOrder(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createOrder = respondData(
+    (req) => this.purchasingService.createOrder(req.body || {}, req.user?.id),
+    201,
+  );
 
-  listReceipts = (req, res, next) => {
-    try {
-      res.status(200).json(this.purchasingService.listReceipts(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  listReceipts = respond((req) => this.purchasingService.listReceipts(req.query));
 
-  getReceipt = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.purchasingService.getReceipt(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  getReceipt = respondData((req) => this.purchasingService.getReceipt(Number(req.params.id)));
 
-  createReceipt = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.purchasingService.createReceipt(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createReceipt = respondData(
+    (req) => this.purchasingService.createReceipt(req.body || {}, req.user?.id),
+    201,
+  );
 
-  getSupplierLedger = (req, res, next) => {
-    try {
-      res
-        .status(200)
-        .json(this.purchasingService.getSupplierLedger(Number(req.params.supplierId), req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  getSupplierLedger = respond((req) =>
+    this.purchasingService.getSupplierLedger(Number(req.params.supplierId), req.query),
+  );
 }

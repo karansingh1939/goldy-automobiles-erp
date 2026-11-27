@@ -1,110 +1,50 @@
+import { respond, respondData } from '../../shared/http/respond.js';
+
 export class JobCardController {
   constructor(jobCardService) {
     this.jobCardService = jobCardService;
   }
 
-  list = (req, res, next) => {
-    try {
-      const result = this.jobCardService.list(req.query);
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
+  list = respond((req) => this.jobCardService.list(req.query));
 
-  get = (req, res, next) => {
-    try {
-      const data = this.jobCardService.get(Number(req.params.id));
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
+  get = respond((req) => {
+    const data = this.jobCardService.get(Number(req.params.id));
+    return { data };
+  });
 
-  create = (req, res, next) => {
-    try {
-      res.status(201).json({ data: this.jobCardService.create(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  create = respondData((req) => this.jobCardService.create(req.body || {}, req.user?.id), 201);
 
-  addPart = (req, res, next) => {
-    try {
-      const part = this.jobCardService.addPart(Number(req.params.id), req.body || {}, req.user?.id);
-      res.status(201).json({ data: part });
-    } catch (error) {
-      next(error);
-    }
-  };
+  addPart = respondData(
+    (req) => this.jobCardService.addPart(Number(req.params.id), req.body || {}, req.user?.id),
+    201,
+  );
 
-  removeLine = (req, res, next) => {
-    try {
-      res.status(200).json({
-        data: this.jobCardService.removeLine(
-          Number(req.params.id),
-          req.params.kind,
-          Number(req.params.lineId),
-          req.user?.id,
-        ),
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
+  removeLine = respondData((req) =>
+    this.jobCardService.removeLine(
+      Number(req.params.id),
+      req.params.kind,
+      Number(req.params.lineId),
+      req.user?.id,
+    ),
+  );
 
-  cancel = (req, res, next) => {
-    try {
-      res.status(200).json({
-        data: this.jobCardService.cancelJobCard(
-          Number(req.params.id),
-          req.body?.reason,
-          req.user?.id,
-        ),
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
+  cancel = respondData((req) =>
+    this.jobCardService.cancelJobCard(Number(req.params.id), req.body?.reason, req.user?.id),
+  );
 
-  addLabour = (req, res, next) => {
-    try {
-      const labour = this.jobCardService.addLabour(
-        Number(req.params.id),
-        req.body || {},
-        req.user?.id,
-      );
-      res.status(201).json({ data: labour });
-    } catch (error) {
-      next(error);
-    }
-  };
+  addLabour = respondData(
+    (req) => this.jobCardService.addLabour(Number(req.params.id), req.body || {}, req.user?.id),
+    201,
+  );
 
-  finalize = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.jobCardService.finalize(Number(req.params.id), req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  finalize = respondData(
+    (req) => this.jobCardService.finalize(Number(req.params.id), req.user?.id),
+    201,
+  );
 
-  getInvoice = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.jobCardService.getInvoice(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  getInvoice = respondData((req) => this.jobCardService.getInvoice(Number(req.params.id)));
 
-  cancelInvoice = (req, res, next) => {
-    try {
-      res
-        .status(200)
-        .json({ data: this.jobCardService.cancelInvoice(Number(req.params.id), req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  cancelInvoice = respondData((req) =>
+    this.jobCardService.cancelInvoice(Number(req.params.id), req.user?.id),
+  );
 }

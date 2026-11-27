@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { localDate } from '../../shared/utils/local-date.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
@@ -5,47 +6,9 @@ import { AuditRepository } from '../audit/audit.repository.js';
 import { InventoryRepository } from './inventory.repository.js';
 import { getStarterCatalog } from './starter-catalog.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
-
-function number(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function money(value) {
-  return Math.round(number(value) * 100) / 100;
-}
-
-const roundMoney = money;
-
-function required(value, label) {
-  if (value === undefined || value === null || value === '') {
-    throw new AppError(`${label} is required.`, 400, 'VALIDATION_ERROR');
-  }
-}
-
-function code(prefix) {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
-
-function normalizeDatabaseError(error) {
-  if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    return new AppError(
-      'A record with the same unique value already exists.',
-      409,
-      'DUPLICATE_RECORD',
-    );
-  }
-
-  if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-    return new AppError('Related record was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-  }
-
-  if (error.code?.startsWith('SQLITE_CONSTRAINT')) {
-    return new AppError('Record violates a database constraint.', 400, 'CONSTRAINT_FAILED');
-  }
-
-  return error;
-}
+import { cashOrBankLedgerId, systemLedgerId } from '../accounting/ledgers.js';
+import { toNumber, roundMoney } from '../../shared/utils/numbers.js';
+import { isIsoDate, pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
 
 export class InventoryService {
   constructor(db) {
@@ -71,8 +34,7 @@ export class InventoryService {
   }
 
   listItems(query) {
-    const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-    const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
+    const { page, pageSize } = parsePaging(query);
     const search = typeof query.search === 'string' ? query.search.trim() : '';
     const categoryId =
       query.category_id === undefined || query.category_id === ''
@@ -90,12 +52,7 @@ export class InventoryService {
 
     return {
       data: result.data,
-      pagination: {
-        page,
-        pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / pageSize),
-      },
+      pagination: pageInfo({ page, pageSize }, result.total),
     };
   }
 
@@ -133,21 +90,17 @@ export class InventoryService {
 
     const data = this.validateItemPayload(payloadWithSku);
 
-    try {
-      return this.repository.transaction(() => {
-        const item = this.repository.createItem(data);
-        this.auditRepository.create({
-          userId,
-          action: 'CREATE',
-          entityType: 'inventory_items',
-          entityId: item.id,
-          newValue: item,
-        });
-        return item;
+    return this.repository.transaction(() => {
+      const item = this.repository.createItem(data);
+      this.auditRepository.create({
+        userId,
+        action: 'CREATE',
+        entityType: 'inventory_items',
+        entityId: item.id,
+        newValue: item,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+      return item;
+    });
   }
 
   updateItem(id, payload, userId) {
@@ -158,22 +111,18 @@ export class InventoryService {
       throw new AppError('At least one field is required.', 400, 'VALIDATION_ERROR');
     }
 
-    try {
-      return this.repository.transaction(() => {
-        const item = this.repository.updateItem(id, data);
-        this.auditRepository.create({
-          userId,
-          action: 'UPDATE',
-          entityType: 'inventory_items',
-          entityId: item.id,
-          oldValue: existing,
-          newValue: item,
-        });
-        return item;
+    return this.repository.transaction(() => {
+      const item = this.repository.updateItem(id, data);
+      this.auditRepository.create({
+        userId,
+        action: 'UPDATE',
+        entityType: 'inventory_items',
+        entityId: item.id,
+        oldValue: existing,
+        newValue: item,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+      return item;
+    });
   }
 
   validateItemPayload(payload, { partial = false } = {}) {
@@ -190,26 +139,26 @@ export class InventoryService {
     }
 
     if (payload.gst_rate !== undefined) {
-      const gst = number(payload.gst_rate);
+      const gst = toNumber(payload.gst_rate);
       if (gst < 0 || gst > 100) {
         throw new AppError('GST rate must be between 0 and 100.', 400, 'VALIDATION_ERROR');
       }
     }
 
     if (payload.purchase_cost !== undefined) {
-      if (number(payload.purchase_cost) < 0) {
+      if (toNumber(payload.purchase_cost) < 0) {
         throw new AppError('Purchase cost cannot be negative.', 400, 'VALIDATION_ERROR');
       }
     }
 
     if (payload.selling_price !== undefined) {
-      if (number(payload.selling_price) < 0) {
+      if (toNumber(payload.selling_price) < 0) {
         throw new AppError('Selling price cannot be negative.', 400, 'VALIDATION_ERROR');
       }
     }
 
     if (payload.reorder_level !== undefined || payload.minimum_stock !== undefined) {
-      const minStock = number(payload.reorder_level ?? payload.minimum_stock);
+      const minStock = toNumber(payload.reorder_level ?? payload.minimum_stock);
       if (minStock < 0) {
         throw new AppError('Minimum stock level cannot be negative.', 400, 'VALIDATION_ERROR');
       }
@@ -254,13 +203,13 @@ export class InventoryService {
     if (payload.hsn_code !== undefined || !partial)
       data.hsn_code = payload.hsn_code ? String(payload.hsn_code).trim() : null;
     if (payload.gst_rate !== undefined || !partial)
-      data.gst_rate = number(payload.gst_rate !== undefined ? payload.gst_rate : 18);
+      data.gst_rate = toNumber(payload.gst_rate !== undefined ? payload.gst_rate : 18);
     if (payload.purchase_cost !== undefined || !partial)
-      data.purchase_cost = money(payload.purchase_cost);
+      data.purchase_cost = roundMoney(payload.purchase_cost);
     if (payload.selling_price !== undefined || !partial)
-      data.selling_price = money(payload.selling_price);
+      data.selling_price = roundMoney(payload.selling_price);
     if (payload.reorder_level !== undefined || payload.minimum_stock !== undefined || !partial) {
-      data.reorder_level = number(
+      data.reorder_level = toNumber(
         payload.reorder_level !== undefined
           ? payload.reorder_level
           : payload.minimum_stock !== undefined
@@ -290,12 +239,12 @@ export class InventoryService {
     required(payload.item_id, 'Item');
     required(payload.warehouse_id, 'Warehouse');
 
-    const qty = number(payload.quantity);
+    const qty = toNumber(payload.quantity);
     if (qty <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
 
-    const unitCost = money(payload.unit_cost);
+    const unitCost = roundMoney(payload.unit_cost);
     if (unitCost < 0) {
       throw new AppError('Unit cost cannot be negative.', 400, 'VALIDATION_ERROR');
     }
@@ -330,7 +279,7 @@ export class InventoryService {
         userId,
       });
 
-      const value = money(qty * unitCost);
+      const value = roundMoney(qty * unitCost);
       if (value > 0) {
         const voucher = this.postingEngine.post({
           companyId: 1,
@@ -379,7 +328,7 @@ export class InventoryService {
       throw new AppError('Adjustment type must be IN or OUT.', 400, 'VALIDATION_ERROR');
     }
 
-    const qty = number(payload.quantity);
+    const qty = toNumber(payload.quantity);
     if (qty <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
@@ -392,198 +341,126 @@ export class InventoryService {
     const item = this.getItem(itemId);
     const unitCost =
       payload.unit_cost !== undefined
-        ? money(payload.unit_cost)
-        : money(item.average_cost || item.purchase_cost || 0);
+        ? roundMoney(payload.unit_cost)
+        : roundMoney(item.average_cost || item.purchase_cost || 0);
 
     return this.repository.transaction(() => {
-      let batchId = payload.batch_id || payload.batchId;
-      let batchNumber = payload.batch_number || payload.batchNumber;
-      let stockResult = null;
-      let adjustmentId = null;
-
+      const batch =
+        adjustmentType === 'IN'
+          ? this.batchForAdding(item, warehouseId, payload)
+          : this.batchForRemoving(item, warehouseId, payload);
+      const adjustmentId = this.repository.createStockAdjustment({
+        adjustment_number: nextDocumentNumber(
+          this.db,
+          DocumentSeries.STOCK_ADJUSTMENT,
+          localDate(),
+        ),
+        item_id: itemId,
+        batch_id: batch.id,
+        warehouse_id: warehouseId,
+        adjustment_type: adjustmentType,
+        quantity: qty,
+        unit_cost: unitCost,
+        reason: payload.reason || null,
+        category,
+        created_by: userId,
+      });
+      const movement = {
+        itemId,
+        warehouseId,
+        quantity: qty,
+        transactionType: 'Adjustment',
+        referenceType: 'stock_adjustments',
+        referenceId: adjustmentId,
+        notes: payload.reason || null,
+        userId,
+      };
+      let stockResult;
       if (adjustmentType === 'IN') {
-        if (!batchNumber) {
-          const existingBatch = this.db
-            .prepare(
-              `
-            SELECT id, batch_number 
-            FROM inventory_batches 
-            WHERE item_id = ? AND warehouse_id = ?
-            ORDER BY id DESC LIMIT 1
-          `,
-            )
-            .get(itemId, warehouseId);
-
-          if (existingBatch) {
-            batchNumber = existingBatch.batch_number;
-            batchId = existingBatch.id;
-          } else {
-            batchNumber = `BAT-${item.sku}-OPEN`;
-          }
-        }
-
-        adjustmentId = this.repository.createStockAdjustment({
-          adjustment_number: nextDocumentNumber(
-            this.db,
-            DocumentSeries.STOCK_ADJUSTMENT,
-            localDate(),
-          ),
-          item_id: itemId,
-          batch_id: batchId || null,
-          warehouse_id: warehouseId,
-          adjustment_type: adjustmentType,
-          quantity: qty,
-          unit_cost: unitCost,
-          reason: payload.reason || null,
-          created_by: userId,
-        });
-
         stockResult = this.stockIn({
-          itemId,
-          warehouseId,
+          ...movement,
           supplierId: payload.supplier_id || item.supplier_id || 1,
-          batchNumber,
+          batchNumber: batch.batchNumber,
           manufactureDate: payload.manufacture_date || null,
           expiryDate: payload.expiry_date || null,
-          quantity: qty,
-          unitCost: unitCost,
-          transactionType: 'Adjustment',
-          referenceType: 'stock_adjustments',
-          referenceId: adjustmentId,
-          notes: payload.reason || null,
-          userId,
+          unitCost,
         });
-
-        if (stockResult.batch?.id) {
+        // A new batch only exists once the stock is in.
+        if (stockResult.batch?.id && stockResult.batch.id !== batch.id)
           this.db
             .prepare('UPDATE stock_adjustments SET batch_id = ? WHERE id = ?')
             .run(stockResult.batch.id, adjustmentId);
-        }
       } else {
-        if (!batchId) {
-          let selectedBatch = this.db
-            .prepare(
-              `
-            SELECT id, batch_number 
-            FROM inventory_batches 
-            WHERE item_id = ? AND warehouse_id = ? AND quantity > 0
-            ORDER BY id ASC LIMIT 1
-          `,
-            )
-            .get(itemId, warehouseId);
-
-          if (!selectedBatch) {
-            selectedBatch = this.db
-              .prepare(
-                `
-              SELECT id, batch_number 
-              FROM inventory_batches 
-              WHERE item_id = ? AND warehouse_id = ?
-              ORDER BY id DESC LIMIT 1
-            `,
-              )
-              .get(itemId, warehouseId);
-          }
-
-          if (selectedBatch) {
-            batchId = selectedBatch.id;
-            batchNumber = selectedBatch.batch_number;
-          } else {
-            const defaultBatchNum = `BAT-${item.sku}-OPEN`;
-            const newBatch = this.repository.createBatch({
-              item_id: itemId,
-              warehouse_id: warehouseId,
-              supplier_id: item.supplier_id || 1,
-              batch_number: defaultBatchNum,
-              purchase_cost: item.purchase_cost || 0,
-              selling_price: item.selling_price || 0,
-              quantity: 0,
-            });
-            batchId = newBatch.id;
-            batchNumber = defaultBatchNum;
-          }
-        }
-
-        adjustmentId = this.repository.createStockAdjustment({
-          adjustment_number: nextDocumentNumber(
-            this.db,
-            DocumentSeries.STOCK_ADJUSTMENT,
-            localDate(),
-          ),
-          item_id: itemId,
-          batch_id: batchId,
-          warehouse_id: warehouseId,
-          adjustment_type: adjustmentType,
-          quantity: qty,
-          unit_cost: unitCost,
-          reason: payload.reason || null,
-          created_by: userId,
-        });
-
-        stockResult = this.stockOut({
-          itemId,
-          warehouseId,
-          batchId,
-          quantity: qty,
-          transactionType: 'Adjustment',
-          referenceType: 'stock_adjustments',
-          referenceId: adjustmentId,
-          notes: payload.reason || null,
-          userId,
-        });
+        stockResult = this.stockOut({ ...movement, batchId: batch.id });
       }
 
-      // Update category
-      this.db
-        .prepare('UPDATE stock_adjustments SET category = ? WHERE id = ?')
-        .run(category, adjustmentId);
-
-      // Post double-entry Journal voucher for inventory valuation changes
-      const companyId = 1;
-      const totalVal = roundMoney(qty * unitCost);
-
-      const ledgerEntries = [
-        {
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(
-            companyId,
-            adjustmentType === 'IN' ? 'inventory_stock' : 'stock_adjustments',
-          ),
-          type: 'DEBIT',
-          amount: totalVal,
-          narration: `Stock Adjustment ${category}: ${item.item_name}`,
-        },
-        {
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(
-            companyId,
-            adjustmentType === 'IN' ? 'stock_adjustments' : 'inventory_stock',
-          ),
-          type: 'CREDIT',
-          amount: totalVal,
-          narration: `Stock Adjustment ${category}: ${item.item_name}`,
-        },
-      ];
-
+      // Adding stock: Stock Account up, Stock Adjustments down; removing: the reverse.
+      const totalValue = roundMoney(qty * unitCost);
+      const narration = `Stock Adjustment ${category}: ${item.item_name}`;
+      const [debitKey, creditKey] =
+        adjustmentType === 'IN'
+          ? ['inventory_stock', 'stock_adjustments']
+          : ['stock_adjustments', 'inventory_stock'];
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(1, key);
       const voucher = this.postingEngine.post({
-        companyId,
+        companyId: 1,
         voucherType: 'Journal',
         voucherDate: localDate(),
         narration: payload.reason || `Stock Adjustment ${category} for ${item.item_name}`,
         referenceTable: 'stock_adjustments',
         referenceId: adjustmentId,
-        entries: ledgerEntries,
+        entries: [
+          { ledgerId: ledger(debitKey), type: 'DEBIT', amount: totalValue, narration },
+          { ledgerId: ledger(creditKey), type: 'CREDIT', amount: totalValue, narration },
+        ],
       });
-
       this.db
         .prepare('UPDATE stock_adjustments SET voucher_id = ? WHERE id = ?')
         .run(voucher.voucherId, adjustmentId);
 
-      return {
-        adjustmentId,
-        category,
-        voucherId: voucher.voucherId,
-        ...stockResult,
-      };
+      return { adjustmentId, category, voucherId: voucher.voucherId, ...stockResult };
     });
+  }
+
+  /** Batch to add stock to: the one named, else the newest in that godown, else a new "-OPEN" one. */
+  batchForAdding(item, warehouseId, payload) {
+    const id = payload.batch_id || payload.batchId || null;
+    const batchNumber = payload.batch_number || payload.batchNumber;
+    if (batchNumber) return { id, batchNumber };
+    const newest = this.db
+      .prepare(
+        'SELECT id, batch_number FROM inventory_batches WHERE item_id = ? AND warehouse_id = ? ORDER BY id DESC LIMIT 1',
+      )
+      .get(item.id, warehouseId);
+    return newest
+      ? { id: newest.id, batchNumber: newest.batch_number }
+      : { id, batchNumber: `BAT-${item.sku}-OPEN` };
+  }
+
+  /**
+   * Batch to take stock from: the one named, else the oldest with stock, else
+   * the newest, else an empty "-OPEN" batch (stockOut then reports no stock).
+   */
+  batchForRemoving(item, warehouseId, payload) {
+    const id = payload.batch_id || payload.batchId;
+    if (id) return { id };
+    const found = this.db
+      .prepare(
+        `SELECT id FROM inventory_batches WHERE item_id = ? AND warehouse_id = ?
+         ORDER BY quantity > 0 DESC, CASE WHEN quantity > 0 THEN id ELSE -id END LIMIT 1`,
+      )
+      .get(item.id, warehouseId);
+    if (found) return { id: found.id };
+    const created = this.repository.createBatch({
+      item_id: item.id,
+      warehouse_id: warehouseId,
+      supplier_id: item.supplier_id || 1,
+      batch_number: `BAT-${item.sku}-OPEN`,
+      purchase_cost: item.purchase_cost || 0,
+      selling_price: item.selling_price || 0,
+      quantity: 0,
+    });
+    return { id: created.id };
   }
 
   transferStock(payload, userId) {
@@ -592,7 +469,7 @@ export class InventoryService {
     required(payload.to_warehouse_id, 'To warehouse');
     required(payload.quantity, 'Quantity');
 
-    const qty = number(payload.quantity);
+    const qty = toNumber(payload.quantity);
     if (qty <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
@@ -644,7 +521,7 @@ export class InventoryService {
         quantity: qty,
         shipped_quantity: qty,
         received_quantity: null,
-        unit_cost: money(item.average_cost || sourceBatch.purchase_cost),
+        unit_cost: roundMoney(item.average_cost || sourceBatch.purchase_cost),
         status: 'PENDING',
         notes: payload.notes || null,
         created_by: userId,
@@ -712,17 +589,17 @@ export class InventoryService {
     let physicalQty = 0;
     if (batchId) {
       const batch = this.repository.findBatchById(batchId);
-      physicalQty = batch ? number(batch.quantity) : 0;
+      physicalQty = batch ? toNumber(batch.quantity) : 0;
     } else if (warehouseId) {
       const row = this.db
         .prepare(
           'SELECT SUM(quantity) AS total FROM inventory_batches WHERE item_id = ? AND warehouse_id = ?',
         )
         .get(itemId, warehouseId);
-      physicalQty = number(row?.total);
+      physicalQty = toNumber(row?.total);
     } else {
       const item = this.repository.findItemById(itemId);
-      physicalQty = item ? number(item.current_quantity) : 0;
+      physicalQty = item ? toNumber(item.current_quantity) : 0;
     }
 
     return Math.max(0, physicalQty);
@@ -748,8 +625,8 @@ export class InventoryService {
     required(warehouseId, 'Warehouse');
     required(batchNumber, 'Batch number');
 
-    const qty = number(quantity);
-    const cost = money(unitCost);
+    const qty = toNumber(quantity);
+    const cost = roundMoney(unitCost);
 
     if (qty <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
@@ -777,16 +654,16 @@ export class InventoryService {
       });
     }
 
-    const oldQty = number(item.current_quantity);
-    const oldAverageCost = money(item.average_cost);
+    const oldQty = toNumber(item.current_quantity);
+    const oldAverageCost = roundMoney(item.average_cost);
     const newQty = oldQty + qty;
     const newAverageCost = keepAverageCost
       ? oldAverageCost
-      : money(newQty === 0 ? 0 : (oldQty * oldAverageCost + qty * cost) / newQty);
+      : roundMoney(newQty === 0 ? 0 : (oldQty * oldAverageCost + qty * cost) / newQty);
 
     const updatedBatch = this.repository.updateBatchQuantity(
       batch.id,
-      number(batch.quantity) + qty,
+      toNumber(batch.quantity) + qty,
     );
     const updatedItem = this.repository.updateItemStock({
       itemId,
@@ -836,7 +713,7 @@ export class InventoryService {
     required(warehouseId, 'Warehouse');
     required(batchId, 'Batch');
 
-    const qty = number(quantity);
+    const qty = toNumber(quantity);
     if (qty <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
@@ -863,10 +740,10 @@ export class InventoryService {
       throw new AppError('Insufficient available stock.', 400, 'INSUFFICIENT_STOCK');
     }
 
-    const cost = unitCost === undefined ? money(item.average_cost) : money(unitCost);
-    const newQty = number(item.current_quantity) - qty;
-    const remainingValue = money(
-      number(item.current_quantity) * money(item.average_cost) - qty * cost,
+    const cost = unitCost === undefined ? roundMoney(item.average_cost) : roundMoney(unitCost);
+    const newQty = toNumber(item.current_quantity) - qty;
+    const remainingValue = roundMoney(
+      toNumber(item.current_quantity) * roundMoney(item.average_cost) - qty * cost,
     );
     if (
       unitCost !== undefined &&
@@ -881,11 +758,11 @@ export class InventoryService {
     }
     const averageCost =
       unitCost === undefined || deferPurchaseValuation
-        ? money(item.average_cost)
-        : money(newQty > 0 ? Math.max(0, remainingValue) / newQty : 0);
+        ? roundMoney(item.average_cost)
+        : roundMoney(newQty > 0 ? Math.max(0, remainingValue) / newQty : 0);
     const updatedBatch = this.repository.updateBatchQuantity(
       batch.id,
-      number(batch.quantity) - qty,
+      toNumber(batch.quantity) - qty,
     );
     const updatedItem = this.repository.updateItemStock({
       itemId,
@@ -922,154 +799,80 @@ export class InventoryService {
     return { data: this.repository.stockSummary() };
   }
 
+  /**
+   * Stock value per item at weighted average cost, the same method as the
+   * accounts, optionally as at the end of a past day (rebuilt from movements).
+   */
   stockValuation(query = {}) {
     const method = String(query.method || 'AVCO').toUpperCase();
-    const dateStr = query.date ? String(query.date).trim() : null;
-    const dateLimit = dateStr ? `${dateStr} 23:59:59` : null;
-
-    if (dateStr && !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    if (method !== 'AVCO')
+      throw new AppError(
+        'Stock is valued at weighted average cost (AVCO), the same as the accounts.',
+        400,
+        'VALIDATION_ERROR',
+      );
+    const date = query.date ? String(query.date).trim() : null;
+    if (date && !isIsoDate(date))
       throw new AppError('Invalid date format. Expected YYYY-MM-DD.', 400, 'VALIDATION_ERROR');
-    }
+    // Movements are stamped in UTC; the end of the laptop's day in UTC keeps the index usable.
+    const until = date
+      ? new Date(`${date}T23:59:59.999`).toISOString().slice(0, 19).replace('T', ' ')
+      : null;
 
     const items = this.db
       .prepare(
         'SELECT id, sku, item_name, purchase_cost, average_cost FROM inventory_items WHERE is_active = 1',
       )
       .all();
-    const results = [];
+    const movements = Map.groupBy(
+      this.db
+        .prepare(
+          `SELECT item_id, direction, quantity, unit_cost FROM inventory_transactions
+           ${until ? 'WHERE created_at <= ?' : ''} ORDER BY item_id, id`,
+        )
+        .all(...(until ? [until] : [])),
+      (row) => row.item_id,
+    );
+    const batchStock = new Map(
+      this.db
+        .prepare('SELECT item_id, SUM(quantity) AS total FROM inventory_batches GROUP BY item_id')
+        .all()
+        .map((row) => [row.item_id, toNumber(row.total)]),
+    );
 
-    for (const item of items) {
-      let finalQty = 0;
-      let finalValue = 0;
-      let costPerUnit = 0;
-
-      // 1. Get transactions for this item
-      let txsQuery =
-        'SELECT direction, quantity, unit_cost, batch_id, created_at FROM inventory_transactions WHERE item_id = ?';
-      const params = [item.id];
-      if (dateLimit) {
-        txsQuery += ' AND created_at <= ?';
-        params.push(dateLimit);
-      }
-      txsQuery += ' ORDER BY id ASC';
-      const txs = this.db.prepare(txsQuery).all(...params);
-
-      // Reconstruct historical physical quantity as of date
-      let runningQty = 0;
+    const data = items.map((item) => {
+      const txs = movements.get(item.id) || [];
+      let quantity = 0;
+      let averageCost = toNumber(item.purchase_cost || item.average_cost || 0);
       for (const tx of txs) {
+        const qty = toNumber(tx.quantity);
         if (tx.direction === 'IN') {
-          runningQty += number(tx.quantity);
+          if (quantity + qty > 0)
+            averageCost =
+              (quantity * averageCost + qty * toNumber(tx.unit_cost)) / (quantity + qty);
+          quantity += qty;
         } else {
-          runningQty = Math.max(0, runningQty - number(tx.quantity));
+          quantity = Math.max(0, quantity - qty);
         }
       }
-      if (txs.length === 0 && !dateLimit) {
-        const sumRow = this.db
-          .prepare('SELECT SUM(quantity) AS total FROM inventory_batches WHERE item_id = ?')
-          .get(item.id);
-        runningQty = sumRow?.total ? number(sumRow.total) : 0;
-      }
-      finalQty = runningQty;
-
-      if (method === 'AVCO') {
-        let runningAvgCost = number(item.purchase_cost || item.average_cost || 0);
-        let runningQtyAvg = 0;
-
-        for (const tx of txs) {
-          const qty = number(tx.quantity);
-          const cost = number(tx.unit_cost);
-          if (tx.direction === 'IN') {
-            const newQty = runningQtyAvg + qty;
-            if (newQty > 0) {
-              runningAvgCost = (runningQtyAvg * runningAvgCost + qty * cost) / newQty;
-            }
-            runningQtyAvg = newQty;
-          } else {
-            runningQtyAvg = Math.max(0, runningQtyAvg - qty);
-          }
-        }
-        costPerUnit = money(runningAvgCost);
-        finalValue = money(finalQty * costPerUnit);
-      } else if (method === 'BATCH') {
-        // Query all batches for this item
-        const batches = this.db
-          .prepare('SELECT id, quantity, purchase_cost FROM inventory_batches WHERE item_id = ?')
-          .all(item.id);
-        let itemBatchValue = 0;
-
-        for (const batch of batches) {
-          // Reconstruct historical batch quantity
-          let batchTxsQuery =
-            'SELECT direction, quantity FROM inventory_transactions WHERE batch_id = ?';
-          const batchParams = [batch.id];
-          if (dateLimit) {
-            batchTxsQuery += ' AND created_at <= ?';
-            batchParams.push(dateLimit);
-          }
-          const batchTxs = this.db.prepare(batchTxsQuery).all(...batchParams);
-
-          let bQty = 0;
-          for (const tx of batchTxs) {
-            if (tx.direction === 'IN') {
-              bQty += number(tx.quantity);
-            } else {
-              bQty = Math.max(0, bQty - number(tx.quantity));
-            }
-          }
-          if (batchTxs.length === 0 && !dateLimit) {
-            bQty = number(batch.quantity);
-          }
-          itemBatchValue += bQty * number(batch.purchase_cost);
-        }
-        finalValue = money(itemBatchValue);
-        costPerUnit = finalQty > 0 ? money(finalValue / finalQty) : 0;
-      } else if (method === 'FIFO') {
-        // Query all IN transactions on or before T, ordered by ID DESC (most recent first)
-        let inTxsQuery =
-          "SELECT quantity, unit_cost FROM inventory_transactions WHERE item_id = ? AND direction = 'IN'";
-        const inParams = [item.id];
-        if (dateLimit) {
-          inTxsQuery += ' AND created_at <= ?';
-          inParams.push(dateLimit);
-        }
-        inTxsQuery += ' ORDER BY id DESC';
-        const inTxs = this.db.prepare(inTxsQuery).all(...inParams);
-
-        let remaining = finalQty;
-        let fifoVal = 0;
-
-        for (const tx of inTxs) {
-          if (remaining <= 0) break;
-          const take = Math.min(remaining, number(tx.quantity));
-          fifoVal += take * number(tx.unit_cost);
-          remaining -= take;
-        }
-
-        if (remaining > 0) {
-          fifoVal += remaining * number(item.purchase_cost || item.average_cost || 0);
-        }
-
-        finalValue = money(fifoVal);
-        costPerUnit = finalQty > 0 ? money(finalValue / finalQty) : 0;
-      } else {
-        throw new AppError(`Unsupported valuation method: ${method}`, 400, 'VALIDATION_ERROR');
-      }
-
-      results.push({
+      // Stock entered before movements were recorded has no history yet.
+      if (!txs.length && !until) quantity = batchStock.get(item.id) || 0;
+      const cost = roundMoney(averageCost);
+      return {
         id: item.id,
         sku: item.sku,
         item_name: item.item_name,
-        current_quantity: finalQty,
-        average_cost: costPerUnit,
-        stock_value: finalValue,
-      });
-    }
+        current_quantity: quantity,
+        average_cost: cost,
+        stock_value: roundMoney(quantity * cost),
+      };
+    });
 
     return {
-      data: results,
+      data,
       totals: {
-        quantity: results.reduce((sum, row) => sum + number(row.current_quantity), 0),
-        value: money(results.reduce((sum, row) => sum + number(row.stock_value), 0)),
+        quantity: data.reduce((sum, row) => sum + row.current_quantity, 0),
+        value: roundMoney(data.reduce((sum, row) => sum + row.stock_value, 0)),
       },
     };
   }
@@ -1082,47 +885,32 @@ export class InventoryService {
     return { data: this.repository.lowStock() };
   }
 
-  getSeedStatus() {
-    const starterLoaded = this.db
+  /** True once the starter catalogue was loaded, or when items already exist. */
+  starterLoaded() {
+    const flag = this.db
       .prepare("SELECT value FROM system_settings WHERE key = 'inventory.starter_loaded'")
       .get();
-    if (starterLoaded && starterLoaded.value === 'true') {
-      return { loaded: true };
-    }
-    const itemCount = this.db.prepare('SELECT COUNT(*) AS count FROM inventory_items').get().count;
-    if (itemCount > 0) {
-      return { loaded: true };
-    }
-    return { loaded: false };
+    return (
+      flag?.value === 'true' ||
+      this.db.prepare('SELECT 1 FROM inventory_items LIMIT 1').get() !== undefined
+    );
   }
 
-  seedStarter(userId) {
-    // 1. Check if seed flag is already present in system_settings
-    const starterLoaded = this.db
-      .prepare("SELECT value FROM system_settings WHERE key = 'inventory.starter_loaded'")
-      .get();
-    if (starterLoaded && starterLoaded.value === 'true') {
-      return {
-        loaded: true,
-        itemsSeeded: 0,
-        message: 'Starter inventory already loaded.',
-      };
-    }
+  getSeedStatus() {
+    return { loaded: this.starterLoaded() };
+  }
 
-    // 2. Check if we already have items in inventory_items
-    const itemCount = this.db.prepare('SELECT COUNT(*) AS count FROM inventory_items').get().count;
-    if (itemCount > 0) {
-      // Record setting to prevent future triggers
+  /** Adds the starter parts catalogue (zero stock) once, for a new workshop. */
+  seedStarter() {
+    const markLoaded = () =>
       this.db
         .prepare(
           "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('inventory.starter_loaded', 'true')",
         )
         .run();
-      return {
-        loaded: true,
-        itemsSeeded: 0,
-        message: 'Starter inventory already loaded.',
-      };
+    if (this.starterLoaded()) {
+      markLoaded();
+      return { loaded: true, itemsSeeded: 0, message: 'Starter inventory already loaded.' };
     }
 
     const catalog = getStarterCatalog();
@@ -1179,15 +967,13 @@ export class InventoryService {
 
       let seededCount = 0;
       const seenSkus = new Set();
+      const itemExists = this.db.prepare('SELECT 1 FROM inventory_items WHERE sku = ?');
       for (const item of catalog) {
         if (seenSkus.has(item.sku)) {
           continue;
         }
 
-        const existingItem = this.db
-          .prepare('SELECT id FROM inventory_items WHERE sku = ?')
-          .get(item.sku);
-        if (existingItem) {
+        if (itemExists.get(item.sku)) {
           seenSkus.add(item.sku);
           continue;
         }
@@ -1216,16 +1002,10 @@ export class InventoryService {
         this.repository.createItem(itemPayload);
         seenSkus.add(item.sku);
 
-        // 6. Automatically create batches (opening stock) - Skipped to ensure seeded items start at 0 quantity & 0 value
         seededCount++;
       }
 
-      // Record setting in system_settings
-      this.db
-        .prepare(
-          "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('inventory.starter_loaded', 'true')",
-        )
-        .run();
+      markLoaded();
 
       return {
         loaded: true,
@@ -1236,24 +1016,9 @@ export class InventoryService {
   }
 
   listFixedAssets(query) {
-    const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-    const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
-    const search = typeof query.search === 'string' ? query.search.trim() : '';
-    const result = this.repository.listFixedAssets({
-      search,
-      pageSize,
-      offset: (page - 1) * pageSize,
-    });
-
-    return {
-      data: result.data,
-      pagination: {
-        page,
-        pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / pageSize),
-      },
-    };
+    const paging = parsePaging(query);
+    const result = this.repository.listFixedAssets(paging);
+    return { data: result.data, pagination: pageInfo(paging, result.total) };
   }
 
   /**
@@ -1280,8 +1045,8 @@ export class InventoryService {
       }
     }
 
-    const cost = money(payload.purchase_cost);
-    const gstAmount = money(payload.gst_amount || 0);
+    const cost = roundMoney(payload.purchase_cost);
+    const gstAmount = roundMoney(payload.gst_amount || 0);
     if (!(cost >= 0) || !(gstAmount >= 0)) {
       throw new AppError('Price and GST cannot be below zero.', 400, 'VALIDATION_ERROR');
     }
@@ -1293,71 +1058,71 @@ export class InventoryService {
 
     const text = (value) => (value ? String(value).trim() : null);
 
-    try {
-      return this.repository.transaction(() => {
-        if (!sku) {
-          let next = this.db.prepare('SELECT COUNT(*) AS n FROM fixed_assets').get().n + 1;
+    return this.repository.transaction(() => {
+      if (!sku) {
+        let next = this.db.prepare('SELECT COUNT(*) AS n FROM fixed_assets').get().n + 1;
+        sku = `FA-${String(next).padStart(4, '0')}`;
+        while (this.db.prepare('SELECT 1 FROM fixed_assets WHERE sku = ?').get(sku)) {
+          next += 1;
           sku = `FA-${String(next).padStart(4, '0')}`;
-          while (this.db.prepare('SELECT 1 FROM fixed_assets WHERE sku = ?').get(sku)) {
-            next += 1;
-            sku = `FA-${String(next).padStart(4, '0')}`;
-          }
         }
-        const created = this.repository.createFixedAsset({
-          asset_name: String(payload.asset_name).trim(),
-          sku,
-          category: text(payload.category) || 'Equipment',
-          supplier_id: supplierId,
-          invoice_number: text(payload.invoice_number),
-          purchase_date: String(payload.purchase_date).trim(),
-          purchase_cost: cost,
-          gst_amount: gstAmount,
-          serial_number: text(payload.serial_number),
-          warranty_info: text(payload.warranty_info),
-          notes: text(payload.notes),
-          paid_from: paidFrom,
-          created_by: userId,
-        });
-
-        const total = money(cost + gstAmount);
-        if (total > 0) {
-          const voucher = this.postingEngine.post({
-            companyId: 1,
-            voucherType: paidFrom === 'EARLIER' ? 'Journal' : 'Payment',
-            // Old equipment may predate every financial year in the app, so it
-            // joins the books today; the record keeps its real purchase date.
-            voucherDate: paidFrom === 'EARLIER' ? localDate() : created.purchase_date,
-            referenceTable: 'fixed_assets',
-            referenceId: created.id,
-            narration: `Equipment bought: ${created.asset_name}${paidFrom === 'EARLIER' ? ' (bought earlier)' : ''}`,
-            created_by: userId,
-            entries: [
-              { ledgerId: this.equipmentLedgerId(), type: 'DEBIT', amount: total },
-              {
-                ledgerId: this.assetPaymentLedgerId(paidFrom, payload.payment_account_id),
-                type: 'CREDIT',
-                amount: total,
-              },
-            ],
-          });
-          this.db
-            .prepare('UPDATE fixed_assets SET voucher_id = ? WHERE id = ?')
-            .run(voucher.voucherId, created.id);
-        }
-
-        const asset = this.repository.findFixedAssetById(created.id);
-        this.auditRepository.create({
-          userId,
-          action: 'CREATE',
-          entityType: 'fixed_assets',
-          entityId: asset.id,
-          newValue: asset,
-        });
-        return asset;
+      }
+      const created = this.repository.createFixedAsset({
+        asset_name: String(payload.asset_name).trim(),
+        sku,
+        category: text(payload.category) || 'Equipment',
+        supplier_id: supplierId,
+        invoice_number: text(payload.invoice_number),
+        purchase_date: String(payload.purchase_date).trim(),
+        purchase_cost: cost,
+        gst_amount: gstAmount,
+        serial_number: text(payload.serial_number),
+        warranty_info: text(payload.warranty_info),
+        notes: text(payload.notes),
+        paid_from: paidFrom,
+        created_by: userId,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      const total = roundMoney(cost + gstAmount);
+      if (total > 0) {
+        const voucher = this.postingEngine.post({
+          companyId: 1,
+          voucherType: paidFrom === 'EARLIER' ? 'Journal' : 'Payment',
+          // Old equipment may predate every financial year in the app, so it
+          // joins the books today; the record keeps its real purchase date.
+          voucherDate: paidFrom === 'EARLIER' ? localDate() : created.purchase_date,
+          referenceTable: 'fixed_assets',
+          referenceId: created.id,
+          narration: `Equipment bought: ${created.asset_name}${paidFrom === 'EARLIER' ? ' (bought earlier)' : ''}`,
+          created_by: userId,
+          entries: [
+            {
+              ledgerId: systemLedgerId(this.db, 'workshop_equipment'),
+              type: 'DEBIT',
+              amount: total,
+            },
+            {
+              ledgerId: this.assetPaymentLedgerId(paidFrom, payload.payment_account_id),
+              type: 'CREDIT',
+              amount: total,
+            },
+          ],
+        });
+        this.db
+          .prepare('UPDATE fixed_assets SET voucher_id = ? WHERE id = ?')
+          .run(voucher.voucherId, created.id);
+      }
+
+      const asset = this.repository.findFixedAssetById(created.id);
+      this.auditRepository.create({
+        userId,
+        action: 'CREATE',
+        entityType: 'fixed_assets',
+        entityId: asset.id,
+        newValue: asset,
+      });
+      return asset;
+    });
   }
 
   /** Wrongly entered equipment is cancelled and its money entry reversed. */
@@ -1385,52 +1150,18 @@ export class InventoryService {
     });
   }
 
-  /** The "Workshop Equipment" account under Fixed Assets, made on first use. */
-  equipmentLedgerId() {
-    const found = this.db
-      .prepare("SELECT id FROM ledgers WHERE company_id = 1 AND system_key = 'workshop_equipment'")
-      .get();
-    if (found) return found.id;
-    const id = Number(
-      this.db
-        .prepare(
-          `INSERT INTO ledgers (company_id, name, group_id, opening_balance, nature, is_system, system_key)
-           VALUES (1, 'Workshop Equipment', 3, 0, 'Debit', 1, 'workshop_equipment')`,
-        )
-        .run().lastInsertRowid,
-    );
-    this.db
-      .prepare(
-        'INSERT OR IGNORE INTO ledger_balances (company_id, ledger_id, running_balance) VALUES (1, ?, 0)',
-      )
-      .run(id);
-    return id;
-  }
-
   /** Cash, the chosen (or only) bank account, or capital for equipment bought earlier. */
   assetPaymentLedgerId(paidFrom, accountId) {
-    const resolver = this.postingEngine.ledgerResolver;
-    if (paidFrom === 'CASH') return resolver.getLedgerId(1, 'cash_in_hand');
-    if (paidFrom === 'EARLIER') return resolver.getLedgerId(1, 'capital_account');
-    const banks = this.db
-      .prepare(
-        "SELECT id FROM ledgers WHERE company_id = 1 AND (system_key = 'hdfc_bank' OR system_key LIKE 'bank_%') ORDER BY id",
-      )
-      .all();
-    const chosen = accountId
-      ? banks.find((bank) => bank.id === Number(accountId))
-      : banks.length === 1
-        ? banks[0]
-        : null;
-    if (!chosen) {
-      throw new AppError('Choose which bank account paid for it.', 400, 'BANK_ACCOUNT_REQUIRED');
-    }
-    return chosen.id;
+    if (paidFrom === 'EARLIER') return systemLedgerId(this.db, 'capital_account');
+    return cashOrBankLedgerId(this.db, {
+      cash: paidFrom === 'CASH',
+      bankId: accountId,
+      message: 'Choose which bank account paid for it.',
+    });
   }
 
   listStockVerifications(query) {
-    const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-    const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
+    const { page, pageSize } = parsePaging(query);
     const result = this.repository.listStockVerifications({
       limit: pageSize,
       offset: (page - 1) * pageSize,
@@ -1441,24 +1172,29 @@ export class InventoryService {
 
     return {
       data: result.data,
-      pagination: {
-        page,
-        pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / pageSize),
-      },
+      pagination: pageInfo({ page, pageSize }, result.total),
     };
   }
 
   verifyStock(payload, userId) {
     const verifications = Array.isArray(payload.verifications) ? payload.verifications : [payload];
     const verificationType = payload.verification_type || 'Single Item';
-    const auditSessionId = payload.audit_session_id || code('SES');
+    const auditSessionId = payload.audit_session_id || randomUUID();
 
     if (verifications.length === 0) {
       throw new AppError('At least one verification item is required.', 400, 'VALIDATION_ERROR');
     }
 
+    const godownStock = this.db.prepare(
+      'SELECT SUM(quantity) AS total FROM inventory_batches WHERE item_id = ? AND warehouse_id = ?',
+    );
+    const insertCount = this.db.prepare(
+      `INSERT INTO stock_verifications (
+         verification_number, verification_type, audit_session_id, warehouse_id,
+         item_id, batch_id, previous_quantity, counted_quantity, difference,
+         status, verified_by, notes
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+    );
     return this.repository.transaction(() => {
       const results = [];
 
@@ -1468,7 +1204,7 @@ export class InventoryService {
         required(ver.counted_quantity, 'Counted quantity');
 
         const itemId = Number(ver.item_id);
-        const countedQty = number(ver.counted_quantity);
+        const countedQty = toNumber(ver.counted_quantity);
 
         if (countedQty < 0) {
           throw new AppError('Counted quantity cannot be negative.', 400, 'VALIDATION_ERROR');
@@ -1502,18 +1238,9 @@ export class InventoryService {
               'RELATED_RECORD_NOT_FOUND',
             );
           }
-          previousQty = number(batch.quantity);
+          previousQty = toNumber(batch.quantity);
         } else {
-          const sumRow = this.db
-            .prepare(
-              `
-            SELECT SUM(quantity) AS total 
-            FROM inventory_batches 
-            WHERE item_id = ? AND warehouse_id = ?
-          `,
-            )
-            .get(itemId, warehouseId);
-          previousQty = number(sumRow?.total);
+          previousQty = toNumber(godownStock.get(itemId, warehouseId)?.total);
         }
 
         const difference = countedQty - previousQty;
@@ -1523,29 +1250,19 @@ export class InventoryService {
           localDate(),
         );
 
-        this.db
-          .prepare(
-            `
-          INSERT INTO stock_verifications (
-            verification_number, verification_type, audit_session_id, warehouse_id, 
-            item_id, batch_id, previous_quantity, counted_quantity, difference, 
-            status, verified_by, notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
-        `,
-          )
-          .run(
-            verificationNumber,
-            verificationType,
-            auditSessionId,
-            warehouseId,
-            itemId,
-            batchId,
-            previousQty,
-            countedQty,
-            difference,
-            userId,
-            ver.notes || null,
-          );
+        insertCount.run(
+          verificationNumber,
+          verificationType,
+          auditSessionId,
+          warehouseId,
+          itemId,
+          batchId,
+          previousQty,
+          countedQty,
+          difference,
+          userId,
+          ver.notes || null,
+        );
 
         results.push({
           verification_number: verificationNumber,
@@ -1566,27 +1283,27 @@ export class InventoryService {
     });
   }
 
+  /** A stock count that is still waiting for approval, in a godown that is switched on. */
+  pendingVerification(verificationId, userId) {
+    const ver = this.db
+      .prepare('SELECT * FROM stock_verifications WHERE id = ?')
+      .get(verificationId);
+    if (!ver) throw new AppError('Verification record not found.', 404, 'VERIFICATION_NOT_FOUND');
+    if (ver.status !== 'PENDING')
+      throw new AppError(
+        `Verification has already been processed (status: ${ver.status}).`,
+        400,
+        'VALIDATION_ERROR',
+      );
+    this.assertWarehousePermission(userId, ver.warehouse_id);
+    return ver;
+  }
+
   approveVerification(verificationId, userId) {
     return this.repository.transaction(() => {
-      const ver = this.db
-        .prepare('SELECT * FROM stock_verifications WHERE id = ?')
-        .get(verificationId);
-      if (!ver) {
-        throw new AppError('Verification record not found.', 404, 'VERIFICATION_NOT_FOUND');
-      }
-      if (ver.status !== 'PENDING') {
-        throw new AppError(
-          `Verification has already been processed (status: ${ver.status}).`,
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      this.assertWarehousePermission(userId, ver.warehouse_id);
-
+      const ver = this.pendingVerification(verificationId, userId);
       let adjustmentId = null;
       if (ver.difference !== 0) {
-        this.repository.findItemById(ver.item_id);
         const adjResult = this.createAdjustment(
           {
             itemId: ver.item_id,
@@ -1622,22 +1339,7 @@ export class InventoryService {
 
   rejectVerification(verificationId, userId) {
     return this.repository.transaction(() => {
-      const ver = this.db
-        .prepare('SELECT * FROM stock_verifications WHERE id = ?')
-        .get(verificationId);
-      if (!ver) {
-        throw new AppError('Verification record not found.', 404, 'VERIFICATION_NOT_FOUND');
-      }
-      if (ver.status !== 'PENDING') {
-        throw new AppError(
-          `Verification has already been processed (status: ${ver.status}).`,
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-
-      this.assertWarehousePermission(userId, ver.warehouse_id);
-
+      this.pendingVerification(verificationId, userId);
       this.db
         .prepare(
           `
@@ -1679,7 +1381,7 @@ export class InventoryService {
 
     return {
       totalItems: stats.totalItems || 0,
-      totalValue: money(stats.totalValue || 0),
+      totalValue: roundMoney(stats.totalValue || 0),
       lowStockCount: stats.lowStockCount || 0,
       outOfStockCount: stats.outOfStockCount || 0,
     };
@@ -1703,7 +1405,7 @@ export class InventoryService {
     return this.repository.transaction(() => {
       for (const entry of items) {
         const itemId = Number(entry.itemId ?? entry.item_id);
-        const quantity = number(entry.quantity);
+        const quantity = toNumber(entry.quantity);
         const unitCost = entry.unitCost ?? entry.unit_cost;
         if (!itemId) {
           throw new AppError('Item ID is required for all entries.', 400, 'VALIDATION_ERROR');
@@ -1715,7 +1417,7 @@ export class InventoryService {
         if (!item) {
           throw new AppError(`Item ID ${itemId} not found.`, 404, 'ITEM_NOT_FOUND');
         }
-        const diff = roundMoney(quantity - number(item.current_quantity));
+        const diff = roundMoney(quantity - toNumber(item.current_quantity));
         if (diff > 0) {
           this.createOpeningStock(
             {
@@ -1746,27 +1448,13 @@ export class InventoryService {
     });
   }
 
+  /** Next free automatic item code: ITM-00001, ITM-00002, ... */
   generateSequentialSku() {
-    const rows = this.db.prepare("SELECT sku FROM inventory_items WHERE sku LIKE 'ITM-%'").all();
-    let maxNum = 0;
-    const regex = /^ITM-(\d+)$/;
-    for (const row of rows) {
-      const match = row.sku.match(regex);
-      if (match) {
-        const num = Number.parseInt(match[1], 10);
-        if (num > maxNum) maxNum = num;
-      }
-    }
-
-    let nextNum = maxNum + 1;
-    while (true) {
-      const sku = `ITM-${String(nextNum).padStart(5, '0')}`;
-      const existing = this.db.prepare('SELECT id FROM inventory_items WHERE sku = ?').get(sku);
-      if (!existing) {
-        return sku;
-      }
-      nextNum++;
-    }
+    const highest = this.db
+      .prepare("SELECT sku FROM inventory_items WHERE sku LIKE 'ITM-%'")
+      .all()
+      .reduce((max, { sku }) => Math.max(max, Number(/^ITM-(\d+)$/.exec(sku)?.[1] ?? 0)), 0);
+    return `ITM-${String(highest + 1).padStart(5, '0')}`;
   }
 }
 

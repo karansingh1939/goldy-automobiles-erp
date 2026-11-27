@@ -291,6 +291,7 @@ export class InventoryRepository {
         quantity,
         unit_cost,
         reason,
+        category,
         created_by
       )
       VALUES (
@@ -302,11 +303,12 @@ export class InventoryRepository {
         @quantity,
         @unit_cost,
         @reason,
+        @category,
         @created_by
       )
     `,
       )
-      .run(data);
+      .run({ category: 'NORMAL', ...data });
 
     return result.lastInsertRowid;
   }

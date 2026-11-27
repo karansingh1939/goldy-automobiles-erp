@@ -1,13 +1,15 @@
 import { AppError } from '../errors/app-error.js';
+import { fromDatabaseError } from '../errors/database-error.js';
 
 export function notFoundHandler(req, res, next) {
   next(new AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404, 'ROUTE_NOT_FOUND'));
 }
 
-export function errorHandler(err, req, res, next) {
+export function errorHandler(error, req, res, next) {
   if (res.headersSent) {
-    return next(err);
+    return next(error);
   }
+  const err = fromDatabaseError(error, { deleting: req.method === 'DELETE' });
 
   const statusCode = err.statusCode || 500;
   const code = err.code || 'INTERNAL_SERVER_ERROR';

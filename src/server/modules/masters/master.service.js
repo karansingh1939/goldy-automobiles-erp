@@ -1,32 +1,6 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import { validatePayload } from './master.validator.js';
-
-function normalizeDatabaseError(error, action = null) {
-  if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    return new AppError(
-      'A record with the same unique value already exists.',
-      409,
-      'DUPLICATE_RECORD',
-    );
-  }
-
-  if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-    if (action === 'delete') {
-      return new AppError(
-        'Cannot delete record because it is referenced by other records.',
-        400,
-        'RELATED_RECORD_EXISTS',
-      );
-    }
-    return new AppError('Related record was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-  }
-
-  if (error.code?.startsWith('SQLITE_CONSTRAINT')) {
-    return new AppError('Record violates a database constraint.', 400, 'CONSTRAINT_FAILED');
-  }
-
-  return error;
-}
+import { pageInfo } from '../../shared/utils/validation.js';
 
 export class MasterService {
   constructor({ repository, auditService, config }) {
@@ -40,12 +14,7 @@ export class MasterService {
 
     return {
       data: rows,
-      pagination: {
-        page: query.page,
-        pageSize: query.pageSize,
-        total,
-        totalPages: Math.ceil(total / query.pageSize),
-      },
+      pagination: pageInfo(query, total),
     };
   }
 
@@ -90,20 +59,16 @@ export class MasterService {
     const data = validatePayload(this.config, payload);
     this.validateRelations(data);
 
-    try {
-      const record = this.repository.create(data);
-      this.auditService.record({
-        userId,
-        action: 'CREATE',
-        entityType: this.config.entityType,
-        entityId: record.id,
-        newValue: record,
-      });
+    const record = this.repository.create(data);
+    this.auditService.record({
+      userId,
+      action: 'CREATE',
+      entityType: this.config.entityType,
+      entityId: record.id,
+      newValue: record,
+    });
 
-      return record;
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+    return record;
   }
 
   update(id, payload, userId) {
@@ -119,40 +84,32 @@ export class MasterService {
     const data = validatePayload(this.config, payload, { partial: true });
     this.validateRelations(data);
 
-    try {
-      const record = this.repository.update(id, data);
-      this.auditService.record({
-        userId,
-        action: 'UPDATE',
-        entityType: this.config.entityType,
-        entityId: id,
-        oldValue: existing,
-        newValue: record,
-      });
+    const record = this.repository.update(id, data);
+    this.auditService.record({
+      userId,
+      action: 'UPDATE',
+      entityType: this.config.entityType,
+      entityId: id,
+      oldValue: existing,
+      newValue: record,
+    });
 
-      return record;
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+    return record;
   }
 
   delete(id, userId) {
     const existing = this.get(id);
 
-    try {
-      this.repository.delete(id);
-      this.auditService.record({
-        userId,
-        action: 'DELETE',
-        entityType: this.config.entityType,
-        entityId: id,
-        oldValue: existing,
-      });
+    this.repository.delete(id);
+    this.auditService.record({
+      userId,
+      action: 'DELETE',
+      entityType: this.config.entityType,
+      entityId: id,
+      oldValue: existing,
+    });
 
-      return { success: true };
-    } catch (error) {
-      throw normalizeDatabaseError(error, 'delete');
-    }
+    return { success: true };
   }
 
   validateRelations(data) {

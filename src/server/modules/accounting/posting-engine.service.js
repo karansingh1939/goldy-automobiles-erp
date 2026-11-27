@@ -2,6 +2,7 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { LedgerResolverService } from './ledger-resolver.service.js';
 import { PeriodLockService } from './period-lock.service.js';
 import { VoucherNumberService } from './voucher-number.service.js';
+import { insertLedger, LedgerGroup } from './ledgers.js';
 
 /**
  * Orchestrator service for double-entry ledger postings.
@@ -347,110 +348,50 @@ export class AccountingPostingEngine {
       .run(companyId, ledgerId, running);
   }
 
-  /**
-   * Dynamically retrieves or creates a ledger for a Customer under Sundry Debtors (Group 2).
-   */
+  /** The customer's own ledger under Sundry Debtors, made on first use. */
   getOrCreateCustomerLedger(companyId, customerId) {
     const customer = this.db
       .prepare('SELECT name, phone, ledger_id FROM customers WHERE id = ?')
       .get(customerId);
-    if (!customer) {
+    if (!customer)
       throw new AppError(`Customer ID ${customerId} not found.`, 404, 'CUSTOMER_NOT_FOUND');
-    }
-
-    if (customer.ledger_id) {
-      return customer.ledger_id;
-    }
-
-    const ledgerName = `Customer: ${customer.name} (${customer.phone || customerId})`;
-
-    return this.db.transaction(() => {
-      const existing = this.db
-        .prepare('SELECT id FROM ledgers WHERE company_id = ? AND name = ?')
-        .get(companyId, ledgerName);
-      if (existing) {
-        this.db
-          .prepare('UPDATE customers SET ledger_id = ? WHERE id = ?')
-          .run(existing.id, customerId);
-        return existing.id;
-      }
-
-      const insertLedger = this.db
-        .prepare(
-          `
-        INSERT INTO ledgers (company_id, name, group_id, opening_balance, nature, is_system, linked_entity_type, linked_entity_id)
-        VALUES (?, ?, ?, 0, 'Debit', 0, 'customer', ?)
-      `,
-        )
-        .run(companyId, ledgerName, 2, customerId);
-
-      const ledgerId = insertLedger.lastInsertRowid;
-
-      this.db.prepare('UPDATE customers SET ledger_id = ? WHERE id = ?').run(ledgerId, customerId);
-
-      this.db
-        .prepare(
-          `
-        INSERT OR IGNORE INTO ledger_balances (company_id, ledger_id, running_balance)
-        VALUES (?, ?, 0)
-      `,
-        )
-        .run(companyId, ledgerId);
-
-      return ledgerId;
-    })();
+    return this.partyLedger(companyId, customer, {
+      table: 'customers',
+      id: customerId,
+      name: `Customer: ${customer.name} (${customer.phone || customerId})`,
+      groupId: LedgerGroup.CURRENT_ASSETS,
+      nature: 'Debit',
+      linkedType: 'customer',
+    });
   }
 
-  /**
-   * Dynamically retrieves or creates a ledger for a Supplier under Sundry Creditors (Group 5).
-   */
+  /** The supplier's own ledger under Sundry Creditors, made on first use. */
   getOrCreateSupplierLedger(companyId, supplierId) {
     const supplier = this.db
       .prepare('SELECT name, ledger_id FROM suppliers WHERE id = ?')
       .get(supplierId);
-    if (!supplier) {
+    if (!supplier)
       throw new AppError(`Supplier ID ${supplierId} not found.`, 404, 'SUPPLIER_NOT_FOUND');
-    }
+    return this.partyLedger(companyId, supplier, {
+      table: 'suppliers',
+      id: supplierId,
+      name: `Supplier: ${supplier.name}`,
+      groupId: LedgerGroup.CURRENT_LIABILITIES,
+      nature: 'Credit',
+      linkedType: 'supplier',
+    });
+  }
 
-    if (supplier.ledger_id) {
-      return supplier.ledger_id;
-    }
-
-    const ledgerName = `Supplier: ${supplier.name}`;
-
+  /** Reuses the party's ledger (or one with the same name) or creates it, and links it. */
+  partyLedger(companyId, party, { table, id, name, groupId, nature, linkedType }) {
+    if (party.ledger_id) return party.ledger_id;
     return this.db.transaction(() => {
-      const existing = this.db
-        .prepare('SELECT id FROM ledgers WHERE company_id = ? AND name = ?')
-        .get(companyId, ledgerName);
-      if (existing) {
+      const ledgerId =
         this.db
-          .prepare('UPDATE suppliers SET ledger_id = ? WHERE id = ?')
-          .run(existing.id, supplierId);
-        return existing.id;
-      }
-
-      const insertLedger = this.db
-        .prepare(
-          `
-        INSERT INTO ledgers (company_id, name, group_id, opening_balance, nature, is_system, linked_entity_type, linked_entity_id)
-        VALUES (?, ?, ?, 0, 'Credit', 0, 'supplier', ?)
-      `,
-        )
-        .run(companyId, ledgerName, 5, supplierId);
-
-      const ledgerId = insertLedger.lastInsertRowid;
-
-      this.db.prepare('UPDATE suppliers SET ledger_id = ? WHERE id = ?').run(ledgerId, supplierId);
-
-      this.db
-        .prepare(
-          `
-        INSERT OR IGNORE INTO ledger_balances (company_id, ledger_id, running_balance)
-        VALUES (?, ?, 0)
-      `,
-        )
-        .run(companyId, ledgerId);
-
+          .prepare('SELECT id FROM ledgers WHERE company_id = ? AND name = ?')
+          .get(companyId, name)?.id ??
+        insertLedger(this.db, { name, groupId, nature, linkedType, linkedId: id, companyId });
+      this.db.prepare(`UPDATE ${table} SET ledger_id = ? WHERE id = ?`).run(ledgerId, id);
       return ledgerId;
     })();
   }

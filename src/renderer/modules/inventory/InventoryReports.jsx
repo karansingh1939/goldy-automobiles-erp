@@ -31,7 +31,6 @@ const fields = {
 export default function InventoryReports() {
   const [report, setReport] = useState('summary');
   const [item, setItem] = useState('');
-  const [method, setMethod] = useState('AVCO');
   const [date, setDate] = useState('');
   const stats = useQuery({
     queryKey: ['inventory', 'dashboard-stats'],
@@ -41,7 +40,7 @@ export default function InventoryReports() {
     report === 'movements'
       ? { itemId: item }
       : report === 'valuation'
-        ? { method, ...(date ? { date } : {}) }
+        ? { ...(date ? { date } : {}) }
         : {};
   const valuation = useQuery({
     queryKey: ['inventory', 'valuation-totals', params],
@@ -79,18 +78,6 @@ export default function InventoryReports() {
       )}
       {report === 'valuation' && (
         <div className="grid gap-4 md:grid-cols-2">
-          <label>
-            Valuation method
-            <select
-              className={inputClass}
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-            >
-              {['AVCO', 'FIFO', 'LIFO', 'BATCH'].map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
-          </label>
           <Field
             label="Valuation as of"
             type="date"
@@ -106,7 +93,7 @@ export default function InventoryReports() {
         </div>
       )}
       <Register
-        key={`${report}-${item}-${method}-${date}`}
+        key={`${report}-${item}-${date}`}
         endpoint={`/api/v1/inventory/reports/${report}`}
         params={params}
         columns={[

@@ -1,4 +1,4 @@
-import { localDate } from '../../shared/utils/local-date.js';
+import { addMonths, localDate } from '../../shared/utils/local-date.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { WarrantyRepository } from './warranty.repository.js';
@@ -34,10 +34,7 @@ export class WarrantyService {
       );
     }
 
-    const start = new Date(startDate);
-    const end = new Date(start);
-    end.setMonth(start.getMonth() + Number(warrantyPeriodMonths));
-    const endDateStr = end.toISOString().slice(0, 10);
+    const endDateStr = addMonths(startDate, warrantyPeriodMonths);
 
     return this.repository.createWarrantyRegistration({
       company_id: companyId,

@@ -8,8 +8,8 @@
 
 export const DocumentSeries = Object.freeze({
   WORKSHOP_INVOICE: 'INV', // job card tax invoices
-  COUNTER_INVOICE: 'CS', // counter sale and sales-order shipment tax invoices
-  JOB_CARD: 'JC',
+  COUNTER_INVOICE: 'CS', // counter sale tax invoices
+  JOB_CARD: 'JC', // not a tax document, but easy to read out
   CREDIT_NOTE: 'CN', // customer returns (GST credit notes)
   DEBIT_NOTE: 'DN', // returns to suppliers
   // Not tax documents, but short numbers are easier to read out and find:
@@ -19,7 +19,7 @@ export const DocumentSeries = Object.freeze({
   STOCK_COUNT: 'SC',
   STOCK_MOVE: 'MV',
   STOCK_ADJUSTMENT: 'ADJ',
-  OPENING_STOCK: 'OPN', // job cards (not a tax document, but easy to read out)
+  OPENING_STOCK: 'OPN',
 });
 
 const MAX_LENGTH = 16;

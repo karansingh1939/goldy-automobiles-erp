@@ -15,11 +15,7 @@ export async function run(db) {
       updated_at = CURRENT_TIMESTAMP
   `);
 
-  const transaction = db.transaction(() => {
-    for (const category of categories) {
-      insertCategory.run(...category);
-    }
-  });
-
-  transaction();
+  db.transaction(() => {
+    for (const category of categories) insertCategory.run(...category);
+  })();
 }

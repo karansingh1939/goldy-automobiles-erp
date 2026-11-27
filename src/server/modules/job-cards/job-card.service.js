@@ -7,51 +7,13 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { JobCardRepository } from './job-card.repository.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { releaseDocumentAllocations } from '../accounting/allocation.service.js';
-
-function number(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function money(value) {
-  return Math.round(number(value) * 100) / 100;
-}
-
-function required(value, label) {
-  if (value === undefined || value === null || value === '') {
-    throw new AppError(`${label} is required.`, 400, 'VALIDATION_ERROR');
-  }
-}
-
-function normalizeDatabaseError(error) {
-  if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    return new AppError(
-      'A record with the same unique value already exists.',
-      409,
-      'DUPLICATE_RECORD',
-    );
-  }
-
-  if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-    return new AppError('Related record was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-  }
-
-  if (error.code?.startsWith('SQLITE_CONSTRAINT')) {
-    return new AppError('Record violates a database constraint.', 400, 'CONSTRAINT_FAILED');
-  }
-
-  return error;
-}
+import { toNumber, roundMoney } from '../../shared/utils/numbers.js';
+import { pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
+import { IntakeLookupService, localPhone, normalizeRegistration } from './intake-lookup.service.js';
 
 function parseListQuery(query) {
-  const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-  const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
-
   return {
-    page,
-    pageSize,
-    offset: (page - 1) * pageSize,
-    search: typeof query.search === 'string' ? query.search.trim() : '',
+    ...parsePaging(query),
     status: typeof query.status === 'string' ? query.status.trim() : '',
     fromDate: typeof query.fromDate === 'string' ? query.fromDate.trim() : '',
     toDate: typeof query.toDate === 'string' ? query.toDate.trim() : '',
@@ -60,11 +22,11 @@ function parseListQuery(query) {
 }
 
 function gstAmounts(revenue, gstRate, interstate = false) {
-  const gstTotal = money((revenue * number(gstRate)) / 100);
-  const half = money(gstTotal / 2);
+  const gstTotal = roundMoney((revenue * toNumber(gstRate)) / 100);
+  const half = roundMoney(gstTotal / 2);
   return {
     cgst: interstate ? 0 : half,
-    sgst: interstate ? 0 : money(gstTotal - half),
+    sgst: interstate ? 0 : roundMoney(gstTotal - half),
     igst: interstate ? gstTotal : 0,
     gstTotal,
   };
@@ -77,6 +39,7 @@ export class JobCardService {
     this.inventoryService = new InventoryService(db);
     this.auditRepository = new AuditRepository(db);
     this.postingEngine = new AccountingPostingEngine(db);
+    this.lookups = new IntakeLookupService(db);
   }
 
   list(query = {}) {
@@ -86,10 +49,7 @@ export class JobCardService {
     return {
       data: result.data,
       pagination: {
-        page: parsed.page,
-        pageSize: parsed.pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / parsed.pageSize),
+        ...pageInfo(parsed, result.total),
         unfilteredTotal: result.unfilteredTotal,
         matchType: result.matchType || '',
         matchValue: result.matchValue || '',
@@ -117,11 +77,7 @@ export class JobCardService {
   }
 
   create(payload, userId) {
-    try {
-      return this.repository.transaction(() => this.createIntake(payload, userId));
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+    return this.repository.transaction(() => this.createIntake(payload, userId));
   }
 
   createIntake(payload, userId) {
@@ -131,234 +87,66 @@ export class JobCardService {
     if (!customerId || !vehicleId) {
       required(payload.registration_number, 'Registration Number');
       required(payload.customer_name, 'Customer Name');
-
-      const rawReg = String(payload.registration_number).trim();
-      const regNormalized = rawReg.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-
-      if (regNormalized.length < 4) {
+      const regNormalized = normalizeRegistration(payload.registration_number);
+      if (regNormalized.length < 4)
         throw new AppError(
           'Registration number must be at least 4 alphanumeric characters.',
           400,
           'VALIDATION_ERROR',
         );
-      }
-
-      // Check if vehicle exists using normalized matching
-      let vehicle = this.db
-        .prepare(
-          `
-        SELECT * FROM vehicles 
-        WHERE registration_number_normalized = ?
-           OR replace(replace(replace(replace(registration_number, ' ', ''), '-', ''), '_', ''), '/', '') = ?
-      `,
-        )
-        .get(regNormalized, regNormalized);
-
-      let customer = null;
       let phone = null;
       if (payload.phone) {
-        let clean = String(payload.phone)
-          .trim()
-          .replace(/[^0-9]/g, '');
-        if (clean.length === 12 && clean.startsWith('91')) {
-          clean = clean.slice(2);
-        } else if (clean.length === 11 && clean.startsWith('0')) {
-          clean = clean.slice(1);
-        }
-        if (clean.length !== 10) {
+        phone = localPhone(payload.phone);
+        if (phone.length !== 10)
           throw new AppError('Phone number must be exactly 10 digits.', 400, 'VALIDATION_ERROR');
-        }
-        phone = clean;
+      }
+
+      const vehicle = this.lookups.vehicleRow(regNormalized);
+      let customer = payload.customer_id
+        ? this.db.prepare('SELECT * FROM customers WHERE id = ?').get(payload.customer_id)
+        : null;
+      if (payload.customer_id && !customer && vehicle)
+        throw new AppError('Customer was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
+      if (!customer && phone) customer = this.lookups.customerRowByPhone(phone);
+
+      if (customer) {
+        customerId = customer.id;
+        this.updateChanged('customers', customer, payload, ['name', 'address', 'city', 'notes']);
+      } else {
+        // The name is required, so an unknown phone means a new customer.
+        customerId = this.db
+          .prepare(
+            `INSERT INTO customers (name, phone, address, city, notes, state)
+             VALUES (?, ?, ?, ?, ?, 'Haryana')`,
+          )
+          .run(
+            payload.customer_name,
+            phone,
+            payload.address || null,
+            payload.city || null,
+            payload.notes || null,
+          ).lastInsertRowid;
       }
 
       if (vehicle) {
         vehicleId = vehicle.id;
-
-        // Resolve Target Customer
-        let targetCustomerId = payload.customer_id;
-        if (!targetCustomerId && phone) {
-          // Check by phone
-          const matchingCustomer = this.db
-            .prepare(
-              `
-            SELECT * FROM customers 
-            WHERE phone = ? 
-               OR phone = ? 
-               OR phone = ? 
-               OR phone = ? 
-               OR replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', '') = ?
-               OR substr(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', ''), -10) = ?
-          `,
-            )
-            .get(phone, '0' + phone, '91' + phone, '+91' + phone, phone, phone);
-          if (matchingCustomer) {
-            targetCustomerId = matchingCustomer.id;
-          }
-        }
-
-        if (targetCustomerId) {
-          customerId = targetCustomerId;
-          customer = this.db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
-          if (!customer)
-            throw new AppError('Customer was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-
-          // Update customer details if provided
-          const customerUpdates = {};
-          if (payload.customer_name && payload.customer_name !== customer.name)
-            customerUpdates.name = payload.customer_name;
-          if (payload.address && payload.address !== customer.address)
-            customerUpdates.address = payload.address;
-          if (payload.city && payload.city !== customer.city) customerUpdates.city = payload.city;
-          if (payload.notes && payload.notes !== customer.notes)
-            customerUpdates.notes = payload.notes;
-
-          if (Object.keys(customerUpdates).length > 0) {
-            const setClause = Object.keys(customerUpdates)
-              .map((col) => `${col} = ?`)
-              .join(', ');
-            this.db
-              .prepare(
-                `UPDATE customers SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-              )
-              .run(...Object.values(customerUpdates), customerId);
-          }
-        } else if (payload.customer_name) {
-          // Create new customer
-          const result = this.db
-            .prepare(
-              `
-            INSERT INTO customers (name, phone, address, city, notes, state)
-            VALUES (?, ?, ?, ?, ?, 'Haryana')
-          `,
-            )
-            .run(
-              payload.customer_name,
-              phone || null,
-              payload.address || null,
-              payload.city || null,
-              payload.notes || null,
-            );
-          customerId = result.lastInsertRowid;
-          customer = this.db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
-        } else {
-          customerId = vehicle.customer_id;
-          customer = this.db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
-        }
-
-        // Handle explicit ownership transfer if requested
-        if (payload.transfer_ownership && Number(customerId) !== Number(vehicle.customer_id)) {
-          this.db
-            .prepare(
-              'UPDATE vehicles SET customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            )
-            .run(customerId, vehicle.id);
-          this.auditRepository.create({
-            userId,
-            action: 'UPDATE',
-            entityType: 'vehicles',
-            entityId: vehicle.id,
-            oldValue: { customer_id: vehicle.customer_id },
-            newValue: { customer_id: customerId },
-          });
-        }
-
-        // Update vehicle details if provided
-        const vehicleUpdates = {};
-        if (payload.make && payload.make !== vehicle.make) vehicleUpdates.make = payload.make;
-        if (payload.model && payload.model !== vehicle.model) vehicleUpdates.model = payload.model;
-        if (payload.fuel_type && payload.fuel_type !== vehicle.fuel_type)
-          vehicleUpdates.fuel_type = payload.fuel_type;
-        if (payload.chassis_number && payload.chassis_number !== vehicle.chassis_number)
-          vehicleUpdates.chassis_number = payload.chassis_number;
-        if (payload.engine_number && payload.engine_number !== vehicle.engine_number)
-          vehicleUpdates.engine_number = payload.engine_number;
-
-        if (Object.keys(vehicleUpdates).length > 0) {
-          const setClause = Object.keys(vehicleUpdates)
-            .map((col) => `${col} = ?`)
-            .join(', ');
-          this.db
-            .prepare(
-              `UPDATE vehicles SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            )
-            .run(...Object.values(vehicleUpdates), vehicleId);
-        }
+        this.updateChanged('vehicles', vehicle, payload, [
+          'make',
+          'model',
+          'fuel_type',
+          'chassis_number',
+          'engine_number',
+        ]);
       } else {
-        // Vehicle does not exist. Resolve Customer first.
-        if (payload.customer_id) {
-          customer = this.db
-            .prepare('SELECT * FROM customers WHERE id = ?')
-            .get(payload.customer_id);
-        }
-
-        if (!customer && phone) {
-          customer = this.db
-            .prepare(
-              `
-            SELECT * FROM customers 
-            WHERE phone = ? 
-               OR phone = ? 
-               OR phone = ? 
-               OR phone = ? 
-               OR replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', '') = ?
-               OR substr(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '+', ''), '(', ''), -10) = ?
-          `,
-            )
-            .get(phone, '0' + phone, '91' + phone, '+91' + phone, phone, phone);
-        }
-
-        if (customer) {
-          customerId = customer.id;
-          // Update customer details if provided
-          const customerUpdates = {};
-          if (payload.customer_name && payload.customer_name !== customer.name)
-            customerUpdates.name = payload.customer_name;
-          if (payload.address && payload.address !== customer.address)
-            customerUpdates.address = payload.address;
-          if (payload.city && payload.city !== customer.city) customerUpdates.city = payload.city;
-          if (payload.notes && payload.notes !== customer.notes)
-            customerUpdates.notes = payload.notes;
-
-          if (Object.keys(customerUpdates).length > 0) {
-            const setClause = Object.keys(customerUpdates)
-              .map((col) => `${col} = ?`)
-              .join(', ');
-            this.db
-              .prepare(
-                `UPDATE customers SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-              )
-              .run(...Object.values(customerUpdates), customerId);
-          }
-        } else {
-          // Create new customer
-          const result = this.db
-            .prepare(
-              `
-            INSERT INTO customers (name, phone, address, city, notes, state)
-            VALUES (?, ?, ?, ?, ?, 'Haryana')
-          `,
-            )
-            .run(
-              payload.customer_name,
-              phone || null,
-              payload.address || null,
-              payload.city || null,
-              payload.notes || null,
-            );
-          customerId = result.lastInsertRowid;
-        }
-
-        // Create new vehicle
-        const result = this.db
+        vehicleId = this.db
           .prepare(
-            `
-          INSERT INTO vehicles (customer_id, registration_number, registration_number_normalized, make, model, fuel_type, chassis_number, engine_number, odometer_reading)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
+            `INSERT INTO vehicles (customer_id, registration_number, registration_number_normalized,
+               make, model, fuel_type, chassis_number, engine_number, odometer_reading)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             customerId,
-            rawReg.toUpperCase(),
+            String(payload.registration_number).trim().toUpperCase(),
             regNormalized,
             payload.make || null,
             payload.model || null,
@@ -366,8 +154,7 @@ export class JobCardService {
             payload.chassis_number || null,
             payload.engine_number || null,
             Number(payload.odometer_reading),
-          );
-        vehicleId = result.lastInsertRowid;
+          ).lastInsertRowid;
       }
     }
 
@@ -404,7 +191,7 @@ export class JobCardService {
       throw new AppError('Assigned technician was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
     }
 
-    const odo = number(payload.odometer_reading);
+    const odo = toNumber(payload.odometer_reading);
     if (odo < 0) {
       throw new AppError('Odometer reading cannot be negative.', 400, 'VALIDATION_ERROR');
     }
@@ -417,43 +204,56 @@ export class JobCardService {
       );
     }
 
-    try {
-      return this.repository.transaction(() => {
-        const jobCardId = this.repository.createJobCard({
-          job_card_number:
-            payload.job_card_number ||
-            nextDocumentNumber(this.db, DocumentSeries.JOB_CARD, localDate()),
-          customer_id: customerId,
-          vehicle_id: vehicleId,
-          status: 'DRAFT',
-          complaint: payload.complaint || null,
-          odometer_reading: odo,
-          assigned_to: payload.assigned_to || null,
-          technician_id: payload.technician_id || null,
-          created_by: userId,
-          fuel_level: payload.fuel_level || null,
-          promised_delivery_at: payload.promised_delivery_at || null,
-          toolkit_present: payload.toolkit_present ? 1 : 0,
-          spare_wheel_present: payload.spare_wheel_present ? 1 : 0,
-          jack_present: payload.jack_present ? 1 : 0,
-          stereo_present: payload.stereo_present ? 1 : 0,
-          battery_brand: payload.battery_brand || null,
-        });
-
-        const jobCard = this.get(jobCardId);
-        this.auditRepository.create({
-          userId,
-          action: 'CREATE',
-          entityType: 'job_cards',
-          entityId: jobCardId,
-          newValue: jobCard,
-        });
-
-        return jobCard;
+    return this.repository.transaction(() => {
+      const jobCardId = this.repository.createJobCard({
+        job_card_number:
+          payload.job_card_number ||
+          nextDocumentNumber(this.db, DocumentSeries.JOB_CARD, localDate()),
+        customer_id: customerId,
+        vehicle_id: vehicleId,
+        status: 'DRAFT',
+        complaint: payload.complaint || null,
+        odometer_reading: odo,
+        assigned_to: payload.assigned_to || null,
+        technician_id: payload.technician_id || null,
+        created_by: userId,
+        fuel_level: payload.fuel_level || null,
+        promised_delivery_at: payload.promised_delivery_at || null,
+        toolkit_present: payload.toolkit_present ? 1 : 0,
+        spare_wheel_present: payload.spare_wheel_present ? 1 : 0,
+        jack_present: payload.jack_present ? 1 : 0,
+        stereo_present: payload.stereo_present ? 1 : 0,
+        battery_brand: payload.battery_brand || null,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      const jobCard = this.get(jobCardId);
+      this.auditRepository.create({
+        userId,
+        action: 'CREATE',
+        entityType: 'job_cards',
+        entityId: jobCardId,
+        newValue: jobCard,
+      });
+
+      return jobCard;
+    });
+  }
+
+  /**
+   * Saves the fields the job card form filled in differently (customer_name
+   * maps to name); blank fields never wipe what is stored.
+   */
+  updateChanged(table, row, payload, columns) {
+    const changes = columns
+      .map((column) => [column, payload[column === 'name' ? 'customer_name' : column]])
+      .filter(([column, value]) => value && value !== row[column]);
+    if (!changes.length) return;
+    this.db
+      .prepare(
+        `UPDATE ${table} SET ${changes.map(([column]) => `${column} = ?`).join(', ')},
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      )
+      .run(...changes.map(([, value]) => value), row.id);
   }
 
   addPart(jobCardId, payload, userId) {
@@ -468,98 +268,90 @@ export class JobCardService {
       throw new AppError('Inventory item or batch was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
     }
 
-    const quantity = number(payload.quantity);
+    const quantity = toNumber(payload.quantity);
     if (quantity <= 0) {
       throw new AppError('Quantity must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
 
-    if (number(batch.quantity) < quantity) {
+    if (toNumber(batch.quantity) < quantity) {
       throw new AppError('Insufficient stock for selected batch.', 400, 'INSUFFICIENT_STOCK');
     }
 
-    const sellingPrice = money(payload.selling_price ?? item.selling_price);
+    const sellingPrice = roundMoney(payload.selling_price ?? item.selling_price);
     if (sellingPrice < 0) {
       throw new AppError('Selling price cannot be negative.', 400, 'VALIDATION_ERROR');
     }
 
-    const gstRate = number(payload.gst_rate ?? item.gst_rate);
+    const gstRate = toNumber(payload.gst_rate ?? item.gst_rate);
     if (gstRate < 0 || gstRate > 100) {
       throw new AppError('GST rate must be between 0 and 100.', 400, 'VALIDATION_ERROR');
     }
-    const revenue = money(sellingPrice * quantity);
+    const revenue = roundMoney(sellingPrice * quantity);
     const gst = gstAmounts(revenue, gstRate);
     const categoryName = item.category_name || item.category || '';
     const itemType = /lubricant|lube|oil|fluid/i.test(categoryName) ? 'LUBRICANT' : 'PART';
 
-    try {
-      return this.repository.transaction(() => {
-        const partId = this.repository.createPart({
-          job_card_id: jobCard.id,
-          item_type: itemType,
-          inventory_item_id: item.id,
-          batch_id: batch.id,
-          description: payload.description || item.item_name,
-          quantity,
-          selling_price: sellingPrice,
-          purchase_cost_snapshot: money(item.average_cost || item.purchase_cost),
-          gst_rate: gstRate,
-          gst_amount: gst.gstTotal,
-          line_total: money(revenue + gst.gstTotal),
-        });
-
-        const part = this.repository.listParts(jobCard.id).find((row) => row.id === partId);
-        this.auditRepository.create({
-          userId,
-          action: 'ADD_PART',
-          entityType: 'job_cards',
-          entityId: jobCard.id,
-          newValue: part,
-        });
-
-        return part;
+    return this.repository.transaction(() => {
+      const partId = this.repository.createPart({
+        job_card_id: jobCard.id,
+        item_type: itemType,
+        inventory_item_id: item.id,
+        batch_id: batch.id,
+        description: payload.description || item.item_name,
+        quantity,
+        selling_price: sellingPrice,
+        purchase_cost_snapshot: roundMoney(item.average_cost || item.purchase_cost),
+        gst_rate: gstRate,
+        gst_amount: gst.gstTotal,
+        line_total: roundMoney(revenue + gst.gstTotal),
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      const part = this.repository.listParts(jobCard.id).find((row) => row.id === partId);
+      this.auditRepository.create({
+        userId,
+        action: 'ADD_PART',
+        entityType: 'job_cards',
+        entityId: jobCard.id,
+        newValue: part,
+      });
+
+      return part;
+    });
   }
 
   addLabour(jobCardId, payload, userId) {
     const jobCard = this.getMutableJobCard(jobCardId);
     required(payload.description, 'Labour description');
 
-    const labourCharge = money(payload.labour_charge ?? payload.charge);
+    const labourCharge = roundMoney(payload.labour_charge ?? payload.charge);
     if (labourCharge < 0) {
       throw new AppError('Labour charge cannot be negative.', 400, 'VALIDATION_ERROR');
     }
 
-    try {
-      return this.repository.transaction(() => {
-        const gstRate = number(payload.gst_rate);
-        if (gstRate < 0 || gstRate > 100) {
-          throw new AppError('GST rate must be between 0 and 100.', 400, 'VALIDATION_ERROR');
-        }
+    return this.repository.transaction(() => {
+      const gstRate = toNumber(payload.gst_rate);
+      if (gstRate < 0 || gstRate > 100) {
+        throw new AppError('GST rate must be between 0 and 100.', 400, 'VALIDATION_ERROR');
+      }
 
-        const labourId = this.repository.createLabour({
-          job_card_id: jobCard.id,
-          description: String(payload.description).trim(),
-          labour_charge: labourCharge,
-          gst_rate: gstRate,
-        });
-
-        const labour = this.repository.listLabour(jobCard.id).find((row) => row.id === labourId);
-        this.auditRepository.create({
-          userId,
-          action: 'ADD_LABOUR',
-          entityType: 'job_cards',
-          entityId: jobCard.id,
-          newValue: labour,
-        });
-
-        return labour;
+      const labourId = this.repository.createLabour({
+        job_card_id: jobCard.id,
+        description: String(payload.description).trim(),
+        labour_charge: labourCharge,
+        gst_rate: gstRate,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      const labour = this.repository.listLabour(jobCard.id).find((row) => row.id === labourId);
+      this.auditRepository.create({
+        userId,
+        action: 'ADD_LABOUR',
+        entityType: 'job_cards',
+        entityId: jobCard.id,
+        newValue: labour,
+      });
+
+      return labour;
+    });
   }
 
   /**
@@ -628,336 +420,327 @@ export class JobCardService {
   }
 
   finalize(jobCardId, userId) {
-    try {
-      return this.repository.transaction(() => {
-        const jobCard = this.getMutableJobCard(jobCardId);
-        const parts = this.repository.listParts(jobCard.id);
-        const labourRows = this.repository.listLabour(jobCard.id);
-        if (
-          this.db
-            .prepare(
-              'SELECT id FROM mechanic_time_entries WHERE job_card_id = ? AND stopped_at IS NULL LIMIT 1',
-            )
-            .get(jobCard.id)
-        ) {
-          throw new AppError(
-            'Stop all mechanic timers before billing this job.',
-            409,
-            'JOB_TIMER_RUNNING',
-          );
-        }
-        const approval = this.db
+    return this.repository.transaction(() => {
+      const jobCard = this.getMutableJobCard(jobCardId);
+      const parts = this.repository.listParts(jobCard.id);
+      const labourRows = this.repository.listLabour(jobCard.id);
+      if (
+        this.db
           .prepare(
-            'SELECT * FROM estimate_approvals WHERE job_card_id = ? ORDER BY id DESC LIMIT 1',
+            'SELECT id FROM mechanic_time_entries WHERE job_card_id = ? AND stopped_at IS NULL LIMIT 1',
           )
-          .get(jobCard.id);
-        if (approval && approval.status !== 'APPROVED') {
-          throw new AppError(
-            'Customer estimate approval is required before billing.',
-            409,
-            'ESTIMATE_APPROVAL_REQUIRED',
-          );
-        }
-
-        if (parts.length === 0 && labourRows.length === 0) {
-          throw new AppError(
-            'At least one part or labour line is required before completion.',
-            400,
-            'VALIDATION_ERROR',
-          );
-        }
-
-        const existingInvoice = this.repository.findInvoiceByJobCardId(jobCard.id);
-        if (existingInvoice && existingInvoice.status !== 'CANCELLED') {
-          throw new AppError(
-            'This job card already has an active invoice.',
-            400,
-            'INVOICE_ALREADY_EXISTS',
-          );
-        }
-
-        const companyState =
-          this.db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
-        const customerState =
-          this.repository.findCustomerById(jobCard.customer_id)?.state || companyState;
-        const interstate = customerState.trim().toLowerCase() !== companyState.trim().toLowerCase();
-
-        const partLines = parts.map((part) => {
-          const stockOut = this.inventoryService.stockOut({
-            itemId: part.inventory_item_id,
-            warehouseId: part.warehouse_id,
-            batchId: part.batch_id,
-            quantity: part.quantity,
-            transactionType: 'Consumption',
-            referenceType: 'job_cards',
-            referenceId: jobCard.id,
-            notes: `Job card ${jobCard.job_card_number}`,
-            userId,
-          });
-
-          const revenue = money(number(part.selling_price) * number(part.quantity));
-          const cost = money(stockOut.unitCost * number(part.quantity));
-          const profit = money(revenue - cost);
-          const gst = gstAmounts(revenue, part.gst_rate, interstate);
-
-          return {
-            item_type: part.item_type || 'PART',
-            inventory_item_id: part.inventory_item_id,
-            batch_id: part.batch_id,
-            description: part.description,
-            quantity: number(part.quantity),
-            unit_price: money(part.selling_price),
-            purchase_cost_snapshot: stockOut.unitCost,
-            gst_rate: number(part.gst_rate),
-            cgst_amount: gst.cgst,
-            sgst_amount: gst.sgst,
-            igst_amount: gst.igst,
-            line_revenue: revenue,
-            line_cost: cost,
-            line_profit: profit,
-            line_total: money(revenue + gst.gstTotal),
-          };
-        });
-
-        const labourLines = labourRows.map((labour) => {
-          const revenue = money(labour.labour_charge);
-          const gst = gstAmounts(revenue, labour.gst_rate, interstate);
-          const isOutside = String(labour.description).startsWith('[Outside Job]');
-
-          return {
-            item_type: isOutside ? 'OUTSIDE_JOB' : 'LABOR',
-            inventory_item_id: null,
-            batch_id: null,
-            description: labour.description,
-            quantity: 1,
-            unit_price: revenue,
-            purchase_cost_snapshot: 0,
-            gst_rate: number(labour.gst_rate),
-            cgst_amount: gst.cgst,
-            sgst_amount: gst.sgst,
-            igst_amount: gst.igst,
-            line_revenue: revenue,
-            line_cost: 0,
-            line_profit: revenue,
-            line_total: money(revenue + gst.gstTotal),
-          };
-        });
-
-        const invoiceLines = [...partLines, ...labourLines];
-        const totals = this.calculateInvoiceTotals(invoiceLines);
-        if (approval && totals.grandTotal > approval.amount + 0.005) {
-          throw new AppError(
-            'Invoice exceeds the approved estimate. Request approval for the revised amount.',
-            409,
-            'ESTIMATE_AMOUNT_EXCEEDED',
-          );
-        }
-
-        // Assert Customer Credit Limit (Company ID = 1 by default in job card flow)
-        this.assertCreditLimit(1, jobCard.customer_id, totals.grandTotal);
-
-        const invoiceDate = localDate();
-        const invoiceId = this.repository.createInvoice({
-          invoice_number: nextDocumentNumber(this.db, DocumentSeries.WORKSHOP_INVOICE, invoiceDate),
-          job_card_id: jobCard.id,
-          customer_id: jobCard.customer_id,
-          vehicle_id: jobCard.vehicle_id,
-          invoice_date: invoiceDate,
-          subtotal: totals.revenue,
-          taxable_amount: totals.revenue,
-          cgst_total: totals.cgst,
-          sgst_total: totals.sgst,
-          igst_total: totals.igst,
-          gst_total: totals.gst,
-          grand_total: totals.grandTotal,
-          status: 'FINALIZED',
-          revenue: totals.revenue,
-          cost_total: totals.cost,
-          gross_profit: totals.grossProfit,
-          net_profit: totals.grossProfit,
-          created_by: userId,
-        });
-
-        for (const line of invoiceLines) {
-          const invoiceItemId = this.repository.createInvoiceItem({
-            ...line,
-            invoice_id: invoiceId,
-          });
-
-          if (line.item_type === 'PART' && line.inventory_item_id) {
-            const item = this.repository.db
-              .prepare('SELECT warranty_period_months FROM inventory_items WHERE id = ?')
-              .get(line.inventory_item_id);
-            if (item && item.warranty_period_months > 0) {
-              const start = new Date();
-              const end = new Date(start);
-              end.setMonth(start.getMonth() + Number(item.warranty_period_months));
-
-              let batchNum = null;
-              if (line.batch_id) {
-                const batch = this.repository.db
-                  .prepare('SELECT batch_number FROM inventory_batches WHERE id = ?')
-                  .get(line.batch_id);
-                if (batch) batchNum = batch.batch_number;
-              }
-
-              this.repository.db
-                .prepare(
-                  `
-                INSERT INTO warranty_registrations (
-                  company_id, customer_id, vehicle_id, invoice_id, invoice_item_id, item_id, batch_number, start_date, end_date, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-              `,
-                )
-                .run(
-                  1,
-                  jobCard.customer_id,
-                  jobCard.vehicle_id,
-                  invoiceId,
-                  invoiceItemId,
-                  line.inventory_item_id,
-                  batchNum,
-                  localDate(start),
-                  localDate(end),
-                );
-            }
-          }
-        }
-
-        this.repository.createProfitRecord({
-          invoice_id: invoiceId,
-          revenue: totals.revenue,
-          cost_total: totals.cost,
-          gross_profit: totals.grossProfit,
-          net_profit: totals.grossProfit,
-        });
-
-        // 8. Post Sales Voucher & COGS Journal automatically
-        const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(
-          1,
-          jobCard.customer_id,
+          .get(jobCard.id)
+      ) {
+        throw new AppError(
+          'Stop all mechanic timers before billing this job.',
+          409,
+          'JOB_TIMER_RUNNING',
         );
-        const partsSubtotal = partLines.reduce((sum, line) => sum + line.line_revenue, 0);
-        const labourSubtotal = labourLines.reduce((sum, line) => sum + line.line_revenue, 0);
+      }
+      const approval = this.db
+        .prepare('SELECT * FROM estimate_approvals WHERE job_card_id = ? ORDER BY id DESC LIMIT 1')
+        .get(jobCard.id);
+      if (approval && approval.status !== 'APPROVED') {
+        throw new AppError(
+          'Customer estimate approval is required before billing.',
+          409,
+          'ESTIMATE_APPROVAL_REQUIRED',
+        );
+      }
 
-        const accountingEntries = [];
-        accountingEntries.push({
-          ledgerId: customerLedgerId,
-          type: 'DEBIT',
-          amount: totals.grandTotal,
+      if (parts.length === 0 && labourRows.length === 0) {
+        throw new AppError(
+          'At least one part or labour line is required before completion.',
+          400,
+          'VALIDATION_ERROR',
+        );
+      }
+
+      const existingInvoice = this.repository.findInvoiceByJobCardId(jobCard.id);
+      if (existingInvoice && existingInvoice.status !== 'CANCELLED') {
+        throw new AppError(
+          'This job card already has an active invoice.',
+          400,
+          'INVOICE_ALREADY_EXISTS',
+        );
+      }
+
+      const companyState =
+        this.db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
+      const customerState =
+        this.repository.findCustomerById(jobCard.customer_id)?.state || companyState;
+      const interstate = customerState.trim().toLowerCase() !== companyState.trim().toLowerCase();
+
+      const partLines = parts.map((part) => {
+        const stockOut = this.inventoryService.stockOut({
+          itemId: part.inventory_item_id,
+          warehouseId: part.warehouse_id,
+          batchId: part.batch_id,
+          quantity: part.quantity,
+          transactionType: 'Consumption',
+          referenceType: 'job_cards',
+          referenceId: jobCard.id,
+          notes: `Job card ${jobCard.job_card_number}`,
+          userId,
         });
 
-        if (partsSubtotal > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'parts_sales'),
-            type: 'CREDIT',
-            amount: partsSubtotal,
-          });
-        }
-        if (labourSubtotal > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'labour_sales'),
-            type: 'CREDIT',
-            amount: labourSubtotal,
-          });
-        }
+        const revenue = roundMoney(toNumber(part.selling_price) * toNumber(part.quantity));
+        const cost = roundMoney(stockOut.unitCost * toNumber(part.quantity));
+        const profit = roundMoney(revenue - cost);
+        const gst = gstAmounts(revenue, part.gst_rate, interstate);
 
-        if (totals.cgst > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cgst_output'),
-            type: 'CREDIT',
-            amount: totals.cgst,
-          });
-        }
-        if (totals.sgst > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'sgst_output'),
-            type: 'CREDIT',
-            amount: totals.sgst,
-          });
-        }
+        return {
+          item_type: part.item_type || 'PART',
+          inventory_item_id: part.inventory_item_id,
+          batch_id: part.batch_id,
+          description: part.description,
+          quantity: toNumber(part.quantity),
+          unit_price: roundMoney(part.selling_price),
+          purchase_cost_snapshot: stockOut.unitCost,
+          gst_rate: toNumber(part.gst_rate),
+          cgst_amount: gst.cgst,
+          sgst_amount: gst.sgst,
+          igst_amount: gst.igst,
+          line_revenue: revenue,
+          line_cost: cost,
+          line_profit: profit,
+          line_total: roundMoney(revenue + gst.gstTotal),
+        };
+      });
 
-        if (totals.igst > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'igst_output'),
-            type: 'CREDIT',
-            amount: totals.igst,
-          });
-        }
-        const sumCredits = partsSubtotal + labourSubtotal + totals.gst;
-        const roundoff = money(totals.grandTotal - sumCredits);
-        if (Math.abs(roundoff) >= 0.01) {
-          if (roundoff > 0) {
-            accountingEntries.push({
-              ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-              type: 'CREDIT',
-              amount: roundoff,
-            });
-          } else {
-            accountingEntries.push({
-              ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-              type: 'DEBIT',
-              amount: Math.abs(roundoff),
-            });
+      const labourLines = labourRows.map((labour) => {
+        const revenue = roundMoney(labour.labour_charge);
+        const gst = gstAmounts(revenue, labour.gst_rate, interstate);
+        const isOutside = String(labour.description).startsWith('[Outside Job]');
+
+        return {
+          item_type: isOutside ? 'OUTSIDE_JOB' : 'LABOR',
+          inventory_item_id: null,
+          batch_id: null,
+          description: labour.description,
+          quantity: 1,
+          unit_price: revenue,
+          purchase_cost_snapshot: 0,
+          gst_rate: toNumber(labour.gst_rate),
+          cgst_amount: gst.cgst,
+          sgst_amount: gst.sgst,
+          igst_amount: gst.igst,
+          line_revenue: revenue,
+          line_cost: 0,
+          line_profit: revenue,
+          line_total: roundMoney(revenue + gst.gstTotal),
+        };
+      });
+
+      const invoiceLines = [...partLines, ...labourLines];
+      const totals = this.calculateInvoiceTotals(invoiceLines);
+      if (approval && totals.grandTotal > approval.amount + 0.005) {
+        throw new AppError(
+          'Invoice exceeds the approved estimate. Request approval for the revised amount.',
+          409,
+          'ESTIMATE_AMOUNT_EXCEEDED',
+        );
+      }
+
+      // Assert Customer Credit Limit (Company ID = 1 by default in job card flow)
+      this.assertCreditLimit(1, jobCard.customer_id, totals.grandTotal);
+
+      const invoiceDate = localDate();
+      const invoiceId = this.repository.createInvoice({
+        invoice_number: nextDocumentNumber(this.db, DocumentSeries.WORKSHOP_INVOICE, invoiceDate),
+        job_card_id: jobCard.id,
+        customer_id: jobCard.customer_id,
+        vehicle_id: jobCard.vehicle_id,
+        invoice_date: invoiceDate,
+        subtotal: totals.revenue,
+        taxable_amount: totals.revenue,
+        cgst_total: totals.cgst,
+        sgst_total: totals.sgst,
+        igst_total: totals.igst,
+        gst_total: totals.gst,
+        grand_total: totals.grandTotal,
+        status: 'FINALIZED',
+        revenue: totals.revenue,
+        cost_total: totals.cost,
+        gross_profit: totals.grossProfit,
+        net_profit: totals.grossProfit,
+        created_by: userId,
+      });
+
+      for (const line of invoiceLines) {
+        const invoiceItemId = this.repository.createInvoiceItem({
+          ...line,
+          invoice_id: invoiceId,
+        });
+
+        if (line.item_type === 'PART' && line.inventory_item_id) {
+          const item = this.repository.db
+            .prepare('SELECT warranty_period_months FROM inventory_items WHERE id = ?')
+            .get(line.inventory_item_id);
+          if (item && item.warranty_period_months > 0) {
+            const start = new Date();
+            const end = new Date(start);
+            end.setMonth(start.getMonth() + Number(item.warranty_period_months));
+
+            let batchNum = null;
+            if (line.batch_id) {
+              const batch = this.repository.db
+                .prepare('SELECT batch_number FROM inventory_batches WHERE id = ?')
+                .get(line.batch_id);
+              if (batch) batchNum = batch.batch_number;
+            }
+
+            this.repository.db
+              .prepare(
+                `
+              INSERT INTO warranty_registrations (
+                company_id, customer_id, vehicle_id, invoice_id, invoice_item_id, item_id, batch_number, start_date, end_date, status
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+            `,
+              )
+              .run(
+                1,
+                jobCard.customer_id,
+                jobCard.vehicle_id,
+                invoiceId,
+                invoiceItemId,
+                line.inventory_item_id,
+                batchNum,
+                localDate(start),
+                localDate(end),
+              );
           }
         }
+      }
 
+      this.repository.createProfitRecord({
+        invoice_id: invoiceId,
+        revenue: totals.revenue,
+        cost_total: totals.cost,
+        gross_profit: totals.grossProfit,
+        net_profit: totals.grossProfit,
+      });
+
+      // 8. Post Sales Voucher & COGS Journal automatically
+      const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(1, jobCard.customer_id);
+      const partsSubtotal = partLines.reduce((sum, line) => sum + line.line_revenue, 0);
+      const labourSubtotal = labourLines.reduce((sum, line) => sum + line.line_revenue, 0);
+
+      const accountingEntries = [];
+      accountingEntries.push({
+        ledgerId: customerLedgerId,
+        type: 'DEBIT',
+        amount: totals.grandTotal,
+      });
+
+      if (partsSubtotal > 0) {
+        accountingEntries.push({
+          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'parts_sales'),
+          type: 'CREDIT',
+          amount: partsSubtotal,
+        });
+      }
+      if (labourSubtotal > 0) {
+        accountingEntries.push({
+          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'labour_sales'),
+          type: 'CREDIT',
+          amount: labourSubtotal,
+        });
+      }
+
+      if (totals.cgst > 0) {
+        accountingEntries.push({
+          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cgst_output'),
+          type: 'CREDIT',
+          amount: totals.cgst,
+        });
+      }
+      if (totals.sgst > 0) {
+        accountingEntries.push({
+          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'sgst_output'),
+          type: 'CREDIT',
+          amount: totals.sgst,
+        });
+      }
+
+      if (totals.igst > 0) {
+        accountingEntries.push({
+          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'igst_output'),
+          type: 'CREDIT',
+          amount: totals.igst,
+        });
+      }
+      const sumCredits = partsSubtotal + labourSubtotal + totals.gst;
+      const roundoff = roundMoney(totals.grandTotal - sumCredits);
+      if (Math.abs(roundoff) >= 0.01) {
+        if (roundoff > 0) {
+          accountingEntries.push({
+            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
+            type: 'CREDIT',
+            amount: roundoff,
+          });
+        } else {
+          accountingEntries.push({
+            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
+            type: 'DEBIT',
+            amount: Math.abs(roundoff),
+          });
+        }
+      }
+
+      this.postingEngine.post({
+        companyId: 1,
+        voucherType: 'Sales',
+        voucherDate: localDate(),
+        referenceTable: 'invoices',
+        referenceId: invoiceId,
+        narration: `Sales invoice for Job Card ${jobCard.job_card_number}`,
+        created_by: userId,
+        entries: accountingEntries,
+      });
+
+      if (totals.cost > 0) {
+        const cogsEntries = [
+          {
+            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cogs'),
+            type: 'DEBIT',
+            amount: totals.cost,
+          },
+          {
+            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'inventory_stock'),
+            type: 'CREDIT',
+            amount: totals.cost,
+          },
+        ];
         this.postingEngine.post({
           companyId: 1,
-          voucherType: 'Sales',
+          voucherType: 'Journal',
           voucherDate: localDate(),
           referenceTable: 'invoices',
           referenceId: invoiceId,
-          narration: `Sales invoice for Job Card ${jobCard.job_card_number}`,
+          narration: `Cost of goods sold for Job Card ${jobCard.job_card_number}`,
           created_by: userId,
-          entries: accountingEntries,
+          entries: cogsEntries,
         });
+      }
 
-        if (totals.cost > 0) {
-          const cogsEntries = [
-            {
-              ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cogs'),
-              type: 'DEBIT',
-              amount: totals.cost,
-            },
-            {
-              ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'inventory_stock'),
-              type: 'CREDIT',
-              amount: totals.cost,
-            },
-          ];
-          this.postingEngine.post({
-            companyId: 1,
-            voucherType: 'Journal',
-            voucherDate: localDate(),
-            referenceTable: 'invoices',
-            referenceId: invoiceId,
-            narration: `Cost of goods sold for Job Card ${jobCard.job_card_number}`,
-            created_by: userId,
-            entries: cogsEntries,
-          });
-        }
+      this.repository.updateJobCardStatus(jobCard.id, 'COMPLETED');
+      this.repository.updateVehicleOdometer(jobCard.vehicle_id, jobCard.odometer_reading);
 
-        this.repository.updateJobCardStatus(jobCard.id, 'COMPLETED');
-        this.repository.updateVehicleOdometer(jobCard.vehicle_id, jobCard.odometer_reading);
-
-        const invoice = this.getInvoice(invoiceId);
-        this.auditRepository.create({
-          userId,
-          action: 'FINALIZE',
-          entityType: 'job_cards',
-          entityId: jobCard.id,
-          newValue: invoice,
-        });
-
-        return {
-          jobCard: this.get(jobCard.id),
-          invoice,
-        };
+      const invoice = this.getInvoice(invoiceId);
+      this.auditRepository.create({
+        userId,
+        action: 'FINALIZE',
+        entityType: 'job_cards',
+        entityId: jobCard.id,
+        newValue: invoice,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      return {
+        jobCard: this.get(jobCard.id),
+        invoice,
+      };
+    });
   }
 
   assertCreditLimit(companyId, customerId, grandTotal) {
@@ -985,109 +768,103 @@ export class JobCardService {
   }
 
   cancelInvoice(id, userId) {
-    try {
-      return this.repository.transaction(() => {
-        const invoice = this.getInvoice(id);
-        if (invoice.status === 'CANCELLED') {
-          throw new AppError('Invoice is already cancelled.', 400, 'INVOICE_ALREADY_CANCELLED');
-        }
+    return this.repository.transaction(() => {
+      const invoice = this.getInvoice(id);
+      if (invoice.status === 'CANCELLED') {
+        throw new AppError('Invoice is already cancelled.', 400, 'INVOICE_ALREADY_CANCELLED');
+      }
 
-        if (invoice.status !== 'FINALIZED') {
-          throw new AppError(
-            'Only finalized invoices can be cancelled.',
-            400,
-            'INVALID_INVOICE_STATUS',
-          );
-        }
+      if (invoice.status !== 'FINALIZED') {
+        throw new AppError(
+          'Only finalized invoices can be cancelled.',
+          400,
+          'INVALID_INVOICE_STATUS',
+        );
+      }
 
-        // Money already paid on this bill stays with the customer as an advance.
-        const advanceKept = releaseDocumentAllocations(this.db, 'job_card_invoice', invoice.id);
-        if (money(number(invoice.amount_paid) - advanceKept) > 0) {
-          throw new AppError(
-            'Some payment on this bill could not be matched. Ask for help before cancelling it.',
-            400,
-            'ACTIVE_ALLOCATIONS_EXIST',
-          );
-        }
-        if (advanceKept > 0) {
-          this.db
-            .prepare(
-              "UPDATE invoices SET amount_paid = 0, payment_status = 'UNPAID', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            )
-            .run(invoice.id);
-        }
-        const returns = this.db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM customer_returns WHERE invoice_id = ? AND status <> 'CANCELLED'",
-          )
-          .get(invoice.id).n;
-        if (returns) {
-          throw new AppError(
-            'Invoice has active returns and cannot be cancelled.',
-            400,
-            'ACTIVE_RETURNS_EXIST',
-          );
-        }
-
-        for (const item of invoice.items.filter(
-          (line) => line.item_type === 'PART' || line.item_type === 'LUBRICANT',
-        )) {
-          const batch = this.repository.findBatchById(item.batch_id);
-          if (!batch) {
-            throw new AppError('Invoice batch was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-          }
-
-          this.inventoryService.stockIn({
-            itemId: item.inventory_item_id,
-            warehouseId: batch.warehouse_id,
-            supplierId: batch.supplier_id,
-            batchNumber: batch.batch_number,
-            manufactureDate: batch.manufacture_date,
-            expiryDate: batch.expiry_date,
-            quantity: item.quantity,
-            unitCost: item.purchase_cost_snapshot,
-            transactionType: 'Return',
-            referenceType: 'invoices',
-            referenceId: invoice.id,
-            notes: `Invoice cancellation ${invoice.invoice_number}`,
-            userId,
-          });
-        }
-        // Delete/Reverse linked Vouchers from accounting engine
-        const linkedVouchers = this.db
-          .prepare(
-            "SELECT id FROM vouchers WHERE reference_table = 'invoices' AND reference_id = ?",
-          )
-          .all(invoice.id);
-        for (const v of linkedVouchers) {
-          this.postingEngine.deleteVoucher(1, v.id);
-        }
-
+      // Money already paid on this bill stays with the customer as an advance.
+      const advanceKept = releaseDocumentAllocations(this.db, 'job_card_invoice', invoice.id);
+      if (roundMoney(toNumber(invoice.amount_paid) - advanceKept) > 0) {
+        throw new AppError(
+          'Some payment on this bill could not be matched. Ask for help before cancelling it.',
+          400,
+          'ACTIVE_ALLOCATIONS_EXIST',
+        );
+      }
+      if (advanceKept > 0) {
         this.db
-          .prepare("UPDATE warranty_registrations SET status = 'EXPIRED' WHERE invoice_id = ?")
+          .prepare(
+            "UPDATE invoices SET amount_paid = 0, payment_status = 'UNPAID', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          )
           .run(invoice.id);
-        this.repository.cancelInvoice(invoice.id);
-        this.repository.reverseProfitRecord(invoice.id);
+      }
+      const returns = this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM customer_returns WHERE invoice_id = ? AND status <> 'CANCELLED'",
+        )
+        .get(invoice.id).n;
+      if (returns) {
+        throw new AppError(
+          'Invoice has active returns and cannot be cancelled.',
+          400,
+          'ACTIVE_RETURNS_EXIST',
+        );
+      }
 
-        if (invoice.job_card_id) {
-          this.repository.updateJobCardStatus(invoice.job_card_id, 'CANCELLED');
+      for (const item of invoice.items.filter(
+        (line) => line.item_type === 'PART' || line.item_type === 'LUBRICANT',
+      )) {
+        const batch = this.repository.findBatchById(item.batch_id);
+        if (!batch) {
+          throw new AppError('Invoice batch was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
         }
 
-        const cancelled = this.getInvoice(invoice.id);
-        this.auditRepository.create({
+        this.inventoryService.stockIn({
+          itemId: item.inventory_item_id,
+          warehouseId: batch.warehouse_id,
+          supplierId: batch.supplier_id,
+          batchNumber: batch.batch_number,
+          manufactureDate: batch.manufacture_date,
+          expiryDate: batch.expiry_date,
+          quantity: item.quantity,
+          unitCost: item.purchase_cost_snapshot,
+          transactionType: 'Return',
+          referenceType: 'invoices',
+          referenceId: invoice.id,
+          notes: `Invoice cancellation ${invoice.invoice_number}`,
           userId,
-          action: 'CANCEL',
-          entityType: 'invoices',
-          entityId: invoice.id,
-          oldValue: invoice,
-          newValue: { ...cancelled, advance_kept: advanceKept },
         });
+      }
+      // Delete/Reverse linked Vouchers from accounting engine
+      const linkedVouchers = this.db
+        .prepare("SELECT id FROM vouchers WHERE reference_table = 'invoices' AND reference_id = ?")
+        .all(invoice.id);
+      for (const v of linkedVouchers) {
+        this.postingEngine.deleteVoucher(1, v.id);
+      }
 
-        return { ...cancelled, advance_kept: advanceKept };
+      this.db
+        .prepare("UPDATE warranty_registrations SET status = 'EXPIRED' WHERE invoice_id = ?")
+        .run(invoice.id);
+      this.repository.cancelInvoice(invoice.id);
+      this.repository.reverseProfitRecord(invoice.id);
+
+      if (invoice.job_card_id) {
+        this.repository.updateJobCardStatus(invoice.job_card_id, 'CANCELLED');
+      }
+
+      const cancelled = this.getInvoice(invoice.id);
+      this.auditRepository.create({
+        userId,
+        action: 'CANCEL',
+        entityType: 'invoices',
+        entityId: invoice.id,
+        oldValue: invoice,
+        newValue: { ...cancelled, advance_kept: advanceKept },
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      return { ...cancelled, advance_kept: advanceKept };
+    });
   }
 
   getMutableJobCard(jobCardId) {
@@ -1103,12 +880,12 @@ export class JobCardService {
   }
 
   calculateInvoiceTotals(lines) {
-    const revenue = money(lines.reduce((sum, line) => sum + number(line.line_revenue), 0));
-    const cost = money(lines.reduce((sum, line) => sum + number(line.line_cost), 0));
-    const cgst = money(lines.reduce((sum, line) => sum + number(line.cgst_amount), 0));
-    const sgst = money(lines.reduce((sum, line) => sum + number(line.sgst_amount), 0));
-    const igst = money(lines.reduce((sum, line) => sum + number(line.igst_amount), 0));
-    const gst = money(cgst + sgst + igst);
+    const revenue = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.line_revenue), 0));
+    const cost = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.line_cost), 0));
+    const cgst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.cgst_amount), 0));
+    const sgst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.sgst_amount), 0));
+    const igst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.igst_amount), 0));
+    const gst = roundMoney(cgst + sgst + igst);
 
     return {
       revenue,
@@ -1117,8 +894,8 @@ export class JobCardService {
       sgst,
       igst,
       gst,
-      grandTotal: money(revenue + gst),
-      grossProfit: money(revenue - cost),
+      grandTotal: roundMoney(revenue + gst),
+      grossProfit: roundMoney(revenue - cost),
     };
   }
 }

@@ -1,7 +1,4 @@
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
-
+import { roundMoney } from '../../shared/utils/numbers.js';
 /**
  * Service to execute system-wide data integrity and accounting checks.
  * Detects discrepancies between document statuses, ledger balances, and allocation audit trails.
@@ -262,52 +259,6 @@ export class ReconciliationService {
       isBalanced: diff < 0.01,
       difference: diff,
     };
-  }
-
-  /**
-   * Re-calculates and repairs cached ledger balances in ledger_balances.
-   */
-  repairLedgerBalances(companyId) {
-    this.db.transaction(() => {
-      // Clear cache
-      this.db.prepare('DELETE FROM ledger_balances WHERE company_id = ?').run(companyId);
-
-      const ledgers = this.db
-        .prepare('SELECT id, opening_balance, nature FROM ledgers WHERE company_id = ?')
-        .all(companyId);
-
-      for (const l of ledgers) {
-        const summary = this.db
-          .prepare(
-            `
-          SELECT 
-            COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN je.amount ELSE 0 END), 0) AS debits,
-            COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN je.amount ELSE 0 END), 0) AS credits
-          FROM journal_entries je
-          JOIN vouchers v ON je.voucher_id = v.id AND v.company_id = ? AND v.status <> 'CANCELLED'
-          WHERE je.ledger_id = ?
-        `,
-          )
-          .get(companyId, l.id);
-
-        let calculated = l.opening_balance;
-        if (l.nature === 'Debit') {
-          calculated += summary.debits - summary.credits;
-        } else {
-          calculated += summary.credits - summary.debits;
-        }
-        calculated = roundMoney(calculated);
-
-        this.db
-          .prepare(
-            `
-          INSERT INTO ledger_balances (company_id, ledger_id, running_balance)
-          VALUES (?, ?, ?)
-        `,
-          )
-          .run(companyId, l.id, calculated);
-      }
-    })();
   }
 
   checkInventoryStockIntegrity() {

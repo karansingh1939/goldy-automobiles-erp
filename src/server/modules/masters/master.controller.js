@@ -1,50 +1,20 @@
-import { parseListQuery } from './master.validator.js';
+import { parsePaging } from '../../shared/utils/validation.js';
+import { respond, respondData } from '../../shared/http/respond.js';
 
 export class MasterController {
   constructor(masterService) {
     this.masterService = masterService;
   }
 
-  list = (req, res, next) => {
-    try {
-      const result = this.masterService.list(parseListQuery(req.query));
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
+  list = respond((req) => this.masterService.list(parsePaging(req.query)));
 
-  get = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.masterService.get(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  get = respondData((req) => this.masterService.get(Number(req.params.id)));
 
-  create = (req, res, next) => {
-    try {
-      const record = this.masterService.create(req.body || {}, req.user?.id);
-      res.status(201).json({ data: record });
-    } catch (error) {
-      next(error);
-    }
-  };
+  create = respondData((req) => this.masterService.create(req.body || {}, req.user?.id), 201);
 
-  update = (req, res, next) => {
-    try {
-      const record = this.masterService.update(Number(req.params.id), req.body || {}, req.user?.id);
-      res.status(200).json({ data: record });
-    } catch (error) {
-      next(error);
-    }
-  };
+  update = respondData((req) =>
+    this.masterService.update(Number(req.params.id), req.body || {}, req.user?.id),
+  );
 
-  delete = (req, res, next) => {
-    try {
-      res.status(200).json(this.masterService.delete(Number(req.params.id), req.user?.id));
-    } catch (error) {
-      next(error);
-    }
-  };
+  delete = respond((req) => this.masterService.delete(Number(req.params.id), req.user?.id));
 }

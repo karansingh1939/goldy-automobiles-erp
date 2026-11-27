@@ -2,8 +2,8 @@ import { localDate } from '../../shared/utils/local-date.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { PeriodLockService } from './period-lock.service.js';
 import { WorkshopFinanceRepository } from './workshop-finance.repository.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
 
-const money = (value) => Math.round(value * 100) / 100;
 export class WorkshopFinanceService {
   constructor(db) {
     this.repository = new WorkshopFinanceRepository(db);
@@ -33,19 +33,21 @@ export class WorkshopFinanceService {
           documents: [],
         });
       const customer = customers.get(row.customer_id);
-      customer.ledgerBalance = money((customer.ledgerBalance || 0) + row.balance);
+      customer.ledgerBalance = roundMoney((customer.ledgerBalance || 0) + row.balance);
     }
     const buckets = { '0–30': 0, '31–60': 0, '61–90': 0, '91+': 0, unaged: 0 };
     const documents = [];
     const parties = [];
     for (const customer of customers.values()) {
-      const invoiceTotal = money(customer.documents.reduce((sum, row) => sum + row.outstanding, 0));
+      const invoiceTotal = roundMoney(
+        customer.documents.reduce((sum, row) => sum + row.outstanding, 0),
+      );
       const balance = customer.ledgerBalance ?? invoiceTotal;
       let credit = Math.max(0, invoiceTotal - Math.max(0, balance));
       for (const row of customer.documents) {
         const applied = Math.min(credit, row.outstanding);
-        credit = money(credit - applied);
-        const outstanding = money(row.outstanding - applied);
+        credit = roundMoney(credit - applied);
+        const outstanding = roundMoney(row.outstanding - applied);
         if (outstanding <= 0) continue;
         const ageDays = Math.max(
           0,
@@ -56,11 +58,11 @@ export class WorkshopFinanceService {
         );
         const bucket =
           ageDays <= 30 ? '0–30' : ageDays <= 60 ? '31–60' : ageDays <= 90 ? '61–90' : '91+';
-        buckets[bucket] = money(buckets[bucket] + outstanding);
+        buckets[bucket] = roundMoney(buckets[bucket] + outstanding);
         documents.push({ ...row, outstanding, ageDays, bucket });
       }
-      const unaged = money(Math.max(0, balance - invoiceTotal));
-      buckets.unaged = money(buckets.unaged + unaged);
+      const unaged = roundMoney(Math.max(0, balance - invoiceTotal));
+      buckets.unaged = roundMoney(buckets.unaged + unaged);
       if (balance !== 0 || invoiceTotal > 0)
         parties.push({
           customerId: customer.customerId,
@@ -76,7 +78,7 @@ export class WorkshopFinanceService {
       buckets,
       documents,
       customers: parties,
-      totalDue: money(Object.values(buckets).reduce((sum, amount) => sum + amount, 0)),
+      totalDue: roundMoney(Object.values(buckets).reduce((sum, amount) => sum + amount, 0)),
     };
   }
   validateDate(date) {
@@ -93,13 +95,13 @@ export class WorkshopFinanceService {
     this.validateDate(date);
     const book = this.repository.cashBook(date);
     if (!book) throw new AppError('Cash ledger is not configured.', 409, 'CASH_LEDGER_MISSING');
-    const opening = money(book.opening_balance + book.prior_net);
+    const opening = roundMoney(book.opening_balance + book.prior_net);
     return {
       date,
       opening,
-      cashIn: money(book.cash_in),
-      cashOut: money(book.cash_out),
-      expectedClosing: money(opening + book.cash_in - book.cash_out),
+      cashIn: roundMoney(book.cash_in),
+      cashOut: roundMoney(book.cash_out),
+      expectedClosing: roundMoney(opening + book.cash_in - book.cash_out),
       counts: this.repository.counts(date),
     };
   }
@@ -130,7 +132,7 @@ export class WorkshopFinanceService {
         throw new AppError('Notes must be text up to 1000 characters.', 400, 'VALIDATION_ERROR');
       const notes = payload.notes?.trim() || '';
       const expected = this.cashSummary(date).expectedClosing;
-      const variance = money(counted - expected);
+      const variance = roundMoney(counted - expected);
       if (variance !== 0 && !notes)
         throw new AppError(
           'Explain the cash variance before saving.',

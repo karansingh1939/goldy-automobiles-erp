@@ -4,25 +4,8 @@ import { ExpenseRepository } from './expense.repository.js';
 import { parseExpenseListQuery, validateExpensePayload } from './expense.validator.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { localDate } from '../../shared/utils/local-date.js';
-
-function normalizeDatabaseError(error, action = null) {
-  if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-    if (action === 'delete') {
-      return new AppError(
-        'Cannot delete record because it is referenced by other records.',
-        400,
-        'RELATED_RECORD_EXISTS',
-      );
-    }
-    return new AppError('Related record was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-  }
-
-  if (error.code?.startsWith('SQLITE_CONSTRAINT')) {
-    return new AppError('Record violates a database constraint.', 400, 'CONSTRAINT_FAILED');
-  }
-
-  return error;
-}
+import { cashOrBankLedgerId } from '../accounting/ledgers.js';
+import { pageInfo } from '../../shared/utils/validation.js';
 
 export class ExpenseService {
   constructor(db) {
@@ -38,12 +21,7 @@ export class ExpenseService {
 
     return {
       data: result.data,
-      pagination: {
-        page: filters.page,
-        pageSize: filters.pageSize,
-        total: result.total,
-        totalPages: Math.ceil(result.total / filters.pageSize),
-      },
+      pagination: pageInfo(filters, result.total),
     };
   }
 
@@ -64,31 +42,27 @@ export class ExpenseService {
   create(payload, userId) {
     const data = validateExpensePayload(payload);
 
-    try {
-      return this.repository.transaction(() => {
-        const expense = this.repository.create({
-          ...data,
-          description: data.description ?? null,
-          payment_mode: data.payment_mode ?? 'CASH',
-          payment_account_id: data.payment_account_id ?? null,
-          created_by: userId || null,
-        });
-
-        this.auditRepository.create({
-          userId,
-          action: 'CREATE',
-          entityType: 'expenses',
-          entityId: expense.id,
-          newValue: expense,
-        });
-
-        this.postExpense(expense, userId);
-
-        return expense;
+    return this.repository.transaction(() => {
+      const expense = this.repository.create({
+        ...data,
+        description: data.description ?? null,
+        payment_mode: data.payment_mode ?? 'CASH',
+        payment_account_id: data.payment_account_id ?? null,
+        created_by: userId || null,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      this.auditRepository.create({
+        userId,
+        action: 'CREATE',
+        entityType: 'expenses',
+        entityId: expense.id,
+        newValue: expense,
+      });
+
+      this.postExpense(expense, userId);
+
+      return expense;
+    });
   }
 
   postExpense(expense, userId) {
@@ -129,73 +103,51 @@ export class ExpenseService {
    * account (or the only bank account when there is just one).
    */
   resolvePaymentLedger(expense) {
-    const mode = expense.payment_mode || 'CASH';
-    if (mode === 'CASH') return this.postingEngine.ledgerResolver.getLedgerId(1, 'cash_in_hand');
-    const banks = this.db
-      .prepare(
-        "SELECT id FROM ledgers WHERE company_id = 1 AND (system_key = 'hdfc_bank' OR system_key LIKE 'bank_%') ORDER BY id",
-      )
-      .all();
-    const chosen = expense.payment_account_id
-      ? banks.find((bank) => bank.id === Number(expense.payment_account_id))
-      : banks.length === 1
-        ? banks[0]
-        : null;
-    if (!chosen)
-      throw new AppError(
-        'Choose which bank account paid this expense.',
-        400,
-        'BANK_ACCOUNT_REQUIRED',
-      );
-    return chosen.id;
+    return cashOrBankLedgerId(this.db, {
+      cash: (expense.payment_mode || 'CASH') === 'CASH',
+      bankId: expense.payment_account_id,
+      message: 'Choose which bank account paid this expense.',
+    });
   }
 
   update(id, payload, userId) {
     const existing = this.get(id);
     const data = validateExpensePayload(payload, { partial: true });
 
-    try {
-      return this.repository.transaction(() => {
-        this.cancelExpensePosting(existing);
-        const expense = this.repository.update(id, data);
-        this.postExpense(expense, userId);
-        this.auditRepository.create({
-          userId,
-          action: 'UPDATE',
-          entityType: 'expenses',
-          entityId: expense.id,
-          oldValue: existing,
-          newValue: expense,
-        });
-
-        return expense;
+    return this.repository.transaction(() => {
+      this.cancelExpensePosting(existing);
+      const expense = this.repository.update(id, data);
+      this.postExpense(expense, userId);
+      this.auditRepository.create({
+        userId,
+        action: 'UPDATE',
+        entityType: 'expenses',
+        entityId: expense.id,
+        oldValue: existing,
+        newValue: expense,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error);
-    }
+
+      return expense;
+    });
   }
 
   delete(id, userId) {
     const existing = this.get(id);
 
-    try {
-      return this.repository.transaction(() => {
-        this.cancelExpensePosting(existing);
+    return this.repository.transaction(() => {
+      this.cancelExpensePosting(existing);
 
-        this.repository.delete(id);
-        this.auditRepository.create({
-          userId,
-          action: 'DELETE',
-          entityType: 'expenses',
-          entityId: id,
-          oldValue: existing,
-        });
-
-        return { success: true };
+      this.repository.delete(id);
+      this.auditRepository.create({
+        userId,
+        action: 'DELETE',
+        entityType: 'expenses',
+        entityId: id,
+        oldValue: existing,
       });
-    } catch (error) {
-      throw normalizeDatabaseError(error, 'delete');
-    }
+
+      return { success: true };
+    });
   }
 
   cancelExpensePosting(expense) {

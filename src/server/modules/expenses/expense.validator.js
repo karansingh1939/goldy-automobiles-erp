@@ -1,5 +1,6 @@
 import { localDate } from '../../shared/utils/local-date.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { hasValue, optionalDate, parsePaging } from '../../shared/utils/validation.js';
 
 export const expenseCategories = [
   'Rent',
@@ -10,25 +11,6 @@ export const expenseCategories = [
   'Maintenance',
   'Miscellaneous',
 ];
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-function hasValue(value) {
-  return value !== undefined && value !== null && value !== '';
-}
-
-function normalizeDate(value) {
-  if (!hasValue(value)) {
-    return undefined;
-  }
-
-  const date = String(value).trim();
-  if (!isoDatePattern.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00.000Z`))) {
-    throw new AppError('Expense date must be a valid YYYY-MM-DD date.', 400, 'VALIDATION_ERROR');
-  }
-
-  return date;
-}
 
 function normalizeCategory(value) {
   if (!hasValue(value)) {
@@ -92,7 +74,8 @@ export function validateExpensePayload(payload = {}, { partial = false } = {}) {
     throw new AppError(`Unknown fields: ${unknownFields.join(', ')}`, 400, 'VALIDATION_ERROR');
   }
 
-  const expenseDate = normalizeDate(payload.expense_date ?? payload.date);
+  const expenseDate =
+    optionalDate(payload.expense_date ?? payload.date, 'Expense date') ?? undefined;
   const category = normalizeCategory(payload.category);
   const amount = normalizeAmount(payload.amount);
   const description = normalizeDescription(payload.description);
@@ -135,20 +118,17 @@ export function validateExpensePayload(payload = {}, { partial = false } = {}) {
 }
 
 export function parseExpenseListQuery(query = {}) {
-  const page = Math.max(Number.parseInt(query.page || '1', 10) || 1, 1);
-  const pageSize = Math.min(Math.max(Number.parseInt(query.pageSize || '20', 10) || 20, 1), 100);
+  const paging = parsePaging(query);
   const category = normalizeCategory(query.category);
-  const dateFrom = normalizeDate(query.dateFrom ?? query.from);
-  const dateTo = normalizeDate(query.dateTo ?? query.to);
+  const dateFrom = optionalDate(query.dateFrom ?? query.from, 'Date from');
+  const dateTo = optionalDate(query.dateTo ?? query.to, 'Date to');
 
   if (dateFrom && dateTo && dateFrom > dateTo) {
     throw new AppError('Date range is invalid.', 400, 'VALIDATION_ERROR');
   }
 
   return {
-    page,
-    pageSize,
-    offset: (page - 1) * pageSize,
+    ...paging,
     category,
     dateFrom,
     dateTo,

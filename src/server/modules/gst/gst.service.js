@@ -1,94 +1,18 @@
-import { localDate } from '../../shared/utils/local-date.js';
-import { AppError } from '../../shared/errors/app-error.js';
 import { GstRepository } from './gst.repository.js';
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-function money(value) {
-  return Math.round(Number(value || 0) * 100) / 100;
-}
-
-function todayString() {
-  return localDate();
-}
-
-function firstDayOfMonth(dateText) {
-  return `${dateText.slice(0, 7)}-01`;
-}
-
-function firstDayOfYear(dateText) {
-  return `${dateText.slice(0, 4)}-01-01`;
-}
-
-function normalizePeriod(period) {
-  if (!period) {
-    return null;
-  }
-
-  return String(period)
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_');
-}
-
-function normalizeDate(value, label) {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-
-  const date = String(value).trim();
-  if (!isoDatePattern.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00.000Z`))) {
-    throw new AppError(`${label} must be a valid YYYY-MM-DD date.`, 400, 'VALIDATION_ERROR');
-  }
-
-  return date;
-}
-
-function parseFilters(query = {}) {
-  const period = normalizePeriod(query.period);
-  const today = todayString();
-  let dateFrom = normalizeDate(query.dateFrom ?? query.from, 'Date from');
-  let dateTo = normalizeDate(query.dateTo ?? query.to, 'Date to');
-
-  if (period === 'today') {
-    dateFrom = today;
-    dateTo = today;
-  } else if (period === 'this_month') {
-    dateFrom = firstDayOfMonth(today);
-    dateTo = today;
-  } else if (period === 'this_year') {
-    dateFrom = firstDayOfYear(today);
-    dateTo = today;
-  } else if (period === 'custom') {
-    if (!dateFrom || !dateTo) {
-      throw new AppError('Custom range requires dateFrom and dateTo.', 400, 'VALIDATION_ERROR');
-    }
-  } else if (period) {
-    throw new AppError('GST report period is invalid.', 400, 'VALIDATION_ERROR');
-  }
-
-  if (dateFrom && dateTo && dateFrom > dateTo) {
-    throw new AppError('Date range is invalid.', 400, 'VALIDATION_ERROR');
-  }
-
-  return {
-    period,
-    dateFrom,
-    dateTo,
-  };
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
+import { parseReportPeriod } from '../../shared/utils/report-period.js';
 
 function mapSummaryRow(row) {
   return {
     invoiceCount: row.invoice_count,
     creditNoteCount: row.credit_note_count || 0,
     lineCount: row.line_count,
-    taxableValue: money(row.taxable_value),
-    cgstAmount: money(row.cgst_amount),
-    sgstAmount: money(row.sgst_amount),
-    igstAmount: money(row.igst_amount),
-    totalTax: money(row.total_tax),
-    grossValue: money(row.gross_value),
+    taxableValue: roundMoney(row.taxable_value),
+    cgstAmount: roundMoney(row.cgst_amount),
+    sgstAmount: roundMoney(row.sgst_amount),
+    igstAmount: roundMoney(row.igst_amount),
+    totalTax: roundMoney(row.total_tax),
+    grossValue: roundMoney(row.gross_value),
   };
 }
 
@@ -108,15 +32,15 @@ function mapGstr1Row(row) {
     itemType: row.item_type,
     hsnSac: row.hsn_sac,
     description: row.description,
-    quantity: money(row.quantity),
-    unitPrice: money(row.unit_price),
-    taxableValue: money(row.taxable_value),
-    gstRate: money(row.gst_rate),
-    cgstAmount: money(row.cgst_amount),
-    sgstAmount: money(row.sgst_amount),
-    igstAmount: money(row.igst_amount),
-    totalTax: money(row.total_tax),
-    lineTotal: money(row.line_total),
+    quantity: roundMoney(row.quantity),
+    unitPrice: roundMoney(row.unit_price),
+    taxableValue: roundMoney(row.taxable_value),
+    gstRate: roundMoney(row.gst_rate),
+    cgstAmount: roundMoney(row.cgst_amount),
+    sgstAmount: roundMoney(row.sgst_amount),
+    igstAmount: roundMoney(row.igst_amount),
+    totalTax: roundMoney(row.total_tax),
+    lineTotal: roundMoney(row.line_total),
   };
 }
 
@@ -127,29 +51,29 @@ function mapGstr3bDataset(dataset) {
   return {
     outwardSupplies: {
       invoiceCount: outward.invoice_count,
-      taxableValue: money(outward.taxable_value),
-      integratedTax: money(outward.integrated_tax),
-      centralTax: money(outward.central_tax),
-      stateUtTax: money(outward.state_ut_tax),
-      cess: money(outward.cess),
-      totalTax: money(outward.total_tax),
+      taxableValue: roundMoney(outward.taxable_value),
+      integratedTax: roundMoney(outward.integrated_tax),
+      centralTax: roundMoney(outward.central_tax),
+      stateUtTax: roundMoney(outward.state_ut_tax),
+      cess: roundMoney(outward.cess),
+      totalTax: roundMoney(outward.total_tax),
     },
     eligibleItc: {
       billCount: itc.bill_count,
-      taxableValue: money(itc.taxable_value),
-      integratedTax: money(itc.integrated_tax),
-      centralTax: money(itc.central_tax),
-      stateUtTax: money(itc.state_ut_tax),
-      cess: money(itc.cess),
-      totalTax: money(itc.total_tax),
+      taxableValue: roundMoney(itc.taxable_value),
+      integratedTax: roundMoney(itc.integrated_tax),
+      centralTax: roundMoney(itc.central_tax),
+      stateUtTax: roundMoney(itc.state_ut_tax),
+      cess: roundMoney(itc.cess),
+      totalTax: roundMoney(itc.total_tax),
     },
     rateBreakdown: dataset.rate_breakdown.map((row) => ({
-      gstRate: money(row.gst_rate),
-      taxableValue: money(row.taxable_value),
-      cgstAmount: money(row.cgst_amount),
-      sgstAmount: money(row.sgst_amount),
-      igstAmount: money(row.igst_amount),
-      totalTax: money(row.total_tax),
+      gstRate: roundMoney(row.gst_rate),
+      taxableValue: roundMoney(row.taxable_value),
+      cgstAmount: roundMoney(row.cgst_amount),
+      sgstAmount: roundMoney(row.sgst_amount),
+      igstAmount: roundMoney(row.igst_amount),
+      totalTax: roundMoney(row.total_tax),
     })),
   };
 }
@@ -157,12 +81,12 @@ function mapGstr3bDataset(dataset) {
 function mapHsnRow(row) {
   return {
     hsnSac: row.hsn_sac,
-    quantity: money(row.quantity),
-    taxableValue: money(row.taxable_value),
-    cgstAmount: money(row.cgst_amount),
-    sgstAmount: money(row.sgst_amount),
-    igstAmount: money(row.igst_amount),
-    totalTax: money(row.total_tax),
+    quantity: roundMoney(row.quantity),
+    taxableValue: roundMoney(row.taxable_value),
+    cgstAmount: roundMoney(row.cgst_amount),
+    sgstAmount: roundMoney(row.sgst_amount),
+    igstAmount: roundMoney(row.igst_amount),
+    totalTax: roundMoney(row.total_tax),
   };
 }
 
@@ -173,7 +97,7 @@ export class GstService {
   }
 
   summary(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'GST report');
 
     return {
       filters,
@@ -182,7 +106,7 @@ export class GstService {
   }
 
   gstr1(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'GST report');
 
     return {
       filters,
@@ -191,7 +115,7 @@ export class GstService {
   }
 
   gstr3b(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'GST report');
 
     return {
       filters,
@@ -200,7 +124,7 @@ export class GstService {
   }
 
   hsnSummary(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'GST report');
 
     return {
       filters,

@@ -1,210 +1,83 @@
+import { respond, respondData } from '../../shared/http/respond.js';
+
 export class InventoryController {
   constructor(inventoryService) {
     this.inventoryService = inventoryService;
   }
 
-  listItems = (req, res, next) => {
-    try {
-      const result = this.inventoryService.listItems(req.query);
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
+  listItems = respond((req) => this.inventoryService.listItems(req.query));
 
-  getItem = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.inventoryService.getItem(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  getItem = respondData((req) => this.inventoryService.getItem(Number(req.params.id)));
 
-  getItemBatches = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.inventoryService.getItemBatches(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  getItemBatches = respondData((req) =>
+    this.inventoryService.getItemBatches(Number(req.params.id)),
+  );
 
-  createItem = (req, res, next) => {
-    try {
-      const item = this.inventoryService.createItem(req.body || {}, req.user?.id);
-      res.status(201).json({ data: item });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createItem = respondData(
+    (req) => this.inventoryService.createItem(req.body || {}, req.user?.id),
+    201,
+  );
 
-  updateItem = (req, res, next) => {
-    try {
-      const item = this.inventoryService.updateItem(
-        Number(req.params.id),
-        req.body || {},
-        req.user?.id,
-      );
-      res.status(200).json({ data: item });
-    } catch (error) {
-      next(error);
-    }
-  };
+  updateItem = respondData((req) =>
+    this.inventoryService.updateItem(Number(req.params.id), req.body || {}, req.user?.id),
+  );
 
-  createOpeningStock = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.inventoryService.createOpeningStock(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createOpeningStock = respondData(
+    (req) => this.inventoryService.createOpeningStock(req.body || {}, req.user?.id),
+    201,
+  );
 
-  createAdjustment = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.inventoryService.createAdjustment(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createAdjustment = respondData(
+    (req) => this.inventoryService.createAdjustment(req.body || {}, req.user?.id),
+    201,
+  );
 
-  transferStock = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.inventoryService.transferStock(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  transferStock = respondData(
+    (req) => this.inventoryService.transferStock(req.body || {}, req.user?.id),
+    201,
+  );
 
-  stockSummary = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.stockSummary());
-    } catch (error) {
-      next(error);
-    }
-  };
+  stockSummary = respond(() => this.inventoryService.stockSummary());
 
-  stockValuation = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.stockValuation(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  stockValuation = respond((req) => this.inventoryService.stockValuation(req.query));
 
-  movements = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.movementReport(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  movements = respond((req) => this.inventoryService.movementReport(req.query));
 
-  lowStock = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.lowStockReport());
-    } catch (error) {
-      next(error);
-    }
-  };
+  lowStock = respond(() => this.inventoryService.lowStockReport());
 
-  seedStarter = (req, res, next) => {
-    try {
-      const result = this.inventoryService.seedStarter(req.user?.id);
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
+  seedStarter = respond(() => this.inventoryService.seedStarter());
 
-  getSeedStatus = (req, res, next) => {
-    try {
-      const result = this.inventoryService.getSeedStatus();
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
+  getSeedStatus = respond(() => this.inventoryService.getSeedStatus());
 
-  listFixedAssets = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.listFixedAssets(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  listFixedAssets = respond((req) => this.inventoryService.listFixedAssets(req.query));
 
-  createFixedAsset = (req, res, next) => {
-    try {
-      const asset = this.inventoryService.createFixedAsset(req.body || {}, req.user?.id);
-      res.status(201).json({ data: asset });
-    } catch (error) {
-      next(error);
-    }
-  };
+  createFixedAsset = respondData(
+    (req) => this.inventoryService.createFixedAsset(req.body || {}, req.user?.id),
+    201,
+  );
 
-  cancelFixedAsset = (req, res, next) => {
-    try {
-      const asset = this.inventoryService.cancelFixedAsset(req.params.id, req.user?.id);
-      res.status(200).json({ data: asset });
-    } catch (error) {
-      next(error);
-    }
-  };
+  cancelFixedAsset = respondData((req) =>
+    this.inventoryService.cancelFixedAsset(req.params.id, req.user?.id),
+  );
 
-  listStockVerifications = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.listStockVerifications(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  listStockVerifications = respond((req) =>
+    this.inventoryService.listStockVerifications(req.query),
+  );
 
-  verifyStock = (req, res, next) => {
-    try {
-      const result = this.inventoryService.verifyStock(req.body || {}, req.user?.id);
-      res.status(201).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
+  verifyStock = respondData(
+    (req) => this.inventoryService.verifyStock(req.body || {}, req.user?.id),
+    201,
+  );
 
-  dashboardStats = (req, res, next) => {
-    try {
-      res.status(200).json(this.inventoryService.dashboardStats());
-    } catch (error) {
-      next(error);
-    }
-  };
+  dashboardStats = respond(() => this.inventoryService.dashboardStats());
 
-  bulkSave = (req, res, next) => {
-    try {
-      const result = this.inventoryService.bulkSave(req.body || {}, req.user?.id);
-      res.status(200).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
+  bulkSave = respondData((req) => this.inventoryService.bulkSave(req.body || {}, req.user?.id));
 
-  approveVerification = (req, res, next) => {
-    try {
-      const result = this.inventoryService.approveVerification(Number(req.params.id), req.user?.id);
-      res.status(200).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
+  approveVerification = respondData((req) =>
+    this.inventoryService.approveVerification(Number(req.params.id), req.user?.id),
+  );
 
-  rejectVerification = (req, res, next) => {
-    try {
-      const result = this.inventoryService.rejectVerification(Number(req.params.id), req.user?.id);
-      res.status(200).json({ data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
+  rejectVerification = respondData((req) =>
+    this.inventoryService.rejectVerification(Number(req.params.id), req.user?.id),
+  );
 }

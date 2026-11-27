@@ -1,79 +1,42 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { localDate } from './local-date.js';
 import { env } from '../../config/env.js';
 
+const LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+
+/**
+ * Writes startup and shutdown messages to the console and to one log file
+ * per day (logs/goldy_erp_YYYY-MM-DD.log). A failed write never stops the app.
+ */
 export class Logger {
-  /**
-   * @param {object} options - Options containing logsDir and logLevel
-   */
   constructor({ logsDir, logLevel } = {}) {
     this.logsDir = logsDir || path.join(env.appDataPath, 'logs');
-
-    let resolvedLevel = (logLevel || env.logLevel || 'INFO').toUpperCase();
-    const validLevels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
-    if (!validLevels.includes(resolvedLevel)) {
-      resolvedLevel = 'INFO';
-    }
-    this.logLevel = resolvedLevel;
-
-    this.levels = {
-      DEBUG: 0,
-      INFO: 1,
-      WARN: 2,
-      ERROR: 3,
-    };
-
-    // Ensure logs directory exists automatically
+    const level = String(logLevel || env.logLevel || 'INFO').toUpperCase();
+    this.logLevel = level in LEVELS ? level : 'INFO';
     try {
-      if (!fs.existsSync(this.logsDir)) {
-        fs.mkdirSync(this.logsDir, { recursive: true });
-      }
+      fs.mkdirSync(this.logsDir, { recursive: true });
     } catch (err) {
       console.error(`Failed to create logs directory at ${this.logsDir}:`, err.message);
     }
   }
 
-  /**
-   * Logs a message to stdout/stderr and appends synchronously to the log file.
-   * Safe against filesystem locks or errors.
-   */
   log(level, category, message, context = null) {
-    const targetLevel = (level || 'INFO').toUpperCase();
-    const currentVal = this.levels[targetLevel] !== undefined ? this.levels[targetLevel] : 1;
-    const minVal = this.levels[this.logLevel] !== undefined ? this.levels[this.logLevel] : 1;
+    const targetLevel = String(level || 'INFO').toUpperCase();
+    if ((LEVELS[targetLevel] ?? 1) < LEVELS[this.logLevel]) return;
 
-    // Filter by log level
-    if (currentVal < minVal) {
-      return;
-    }
+    let line = `${new Date().toISOString()} ${targetLevel} ${String(category || 'SYSTEM').toUpperCase()} ${message}`;
+    if (context instanceof Error) line += ` | Error: ${context.message} \nStack: ${context.stack}`;
+    else if (context) line += ` | Context: ${JSON.stringify(context)}`;
 
-    const timestamp = new Date().toISOString();
-    const formattedCategory = (category || 'SYSTEM').toUpperCase();
-
-    let formattedMessage = `${timestamp} ${targetLevel} ${formattedCategory} ${message}`;
-    if (context) {
-      if (context instanceof Error) {
-        formattedMessage += ` | Error: ${context.message} \nStack: ${context.stack}`;
-      } else {
-        formattedMessage += ` | Context: ${JSON.stringify(context)}`;
-      }
-    }
-    formattedMessage += '\n';
-
-    // Fallback console log for operations visibility
-    if (targetLevel === 'ERROR') {
-      console.error(formattedMessage.trim());
-    } else {
-      console.log(formattedMessage.trim());
-    }
-
-    // Safely write to daily log file using appendFileSync to prevent async race conditions
-    const today = new Date().toISOString().split('T')[0];
-    const filename = `goldy_erp_${today}.log`;
-    const logFilePath = path.join(this.logsDir, filename);
-
+    (targetLevel === 'ERROR' ? console.error : console.log)(line);
     try {
-      fs.appendFileSync(logFilePath, formattedMessage, 'utf8');
+      // Synchronous append keeps lines in order without holding a stream open.
+      fs.appendFileSync(
+        path.join(this.logsDir, `goldy_erp_${localDate()}.log`),
+        `${line}\n`,
+        'utf8',
+      );
     } catch (err) {
       console.error('Logger append write failed:', err.message);
     }
@@ -94,27 +57,11 @@ export class Logger {
   error(category, message, context = null) {
     this.log('ERROR', category, message, context);
   }
-
-  /**
-   * Hook for future log rotation support
-   */
-  onRotateHook() {
-    // To be implemented in step 2
-  }
-
-  /**
-   * Safe close method for compatibility
-   */
-  close() {
-    // Synchronous write does not hold persistent streams
-  }
 }
 
-let defaultLoggerInstance = null;
+let defaultLogger = null;
 
 export function getLogger() {
-  if (!defaultLoggerInstance) {
-    defaultLoggerInstance = new Logger();
-  }
-  return defaultLoggerInstance;
+  defaultLogger ||= new Logger();
+  return defaultLogger;
 }

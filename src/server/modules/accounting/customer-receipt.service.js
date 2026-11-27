@@ -1,10 +1,7 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import { AccountingPostingEngine } from './posting-engine.service.js';
 import { AllocationService } from './allocation.service.js';
-
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 /**
  * Service to handle customer payments, deposits, advances, and cancellations.

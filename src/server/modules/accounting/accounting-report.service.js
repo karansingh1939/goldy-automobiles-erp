@@ -1,16 +1,8 @@
 import { AppError } from '../../shared/errors/app-error.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 /**
- * Helper to round financial values safely to 2 decimal places.
- * @param {number} val - Input float
- * @returns {number} Rounded float
- */
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
-
-/**
- * Service to generate GAAP-compliant financial statements and ledger statements.
+ * Trial balance, profit and loss, balance sheet, and the ledger and voucher lists.
  * Executes balance aggregation directly from database journals.
  */
 export class AccountingReportService {
@@ -19,6 +11,41 @@ export class AccountingReportService {
    */
   constructor(db) {
     this.db = db;
+  }
+
+  /** Every ledger with its group name, A to Z. */
+  listLedgers(companyId = 1) {
+    return this.db
+      .prepare(
+        `SELECT l.id, l.name, l.group_id, l.opening_balance, l.nature, l.system_key, ag.name AS group_name
+         FROM ledgers l JOIN account_groups ag ON l.group_id = ag.id
+         WHERE l.company_id = ? ORDER BY l.name`,
+      )
+      .all(companyId);
+  }
+
+  /** Vouchers, newest first, filtered by date range, type and number/narration text. */
+  listVouchers({ startDate, endDate, type, search } = {}, companyId = 1) {
+    // Only the filters given go into the SQL, so SQLite can use its date index.
+    let sql = 'SELECT * FROM vouchers WHERE company_id = ?';
+    const params = [companyId];
+    if (startDate) {
+      sql += ' AND voucher_date >= ?';
+      params.push(startDate);
+    }
+    if (endDate) {
+      sql += ' AND voucher_date <= ?';
+      params.push(endDate);
+    }
+    if (type) {
+      sql += ' AND voucher_type = ?';
+      params.push(type);
+    }
+    if (search) {
+      sql += ' AND (voucher_number LIKE ? OR narration LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    return this.db.prepare(`${sql} ORDER BY voucher_date DESC, id DESC`).all(...params);
   }
 
   /**

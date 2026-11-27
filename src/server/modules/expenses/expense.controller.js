@@ -1,59 +1,21 @@
+import { respond, respondData } from '../../shared/http/respond.js';
+
 export class ExpenseController {
   constructor(expenseService) {
     this.expenseService = expenseService;
   }
 
-  list = (req, res, next) => {
-    try {
-      res.status(200).json(this.expenseService.list(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  list = respond((req) => this.expenseService.list(req.query));
 
-  get = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.expenseService.get(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  get = respondData((req) => this.expenseService.get(Number(req.params.id)));
 
-  summary = (req, res, next) => {
-    try {
-      res.json(this.expenseService.summary(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  summary = respond((req) => this.expenseService.summary(req.query));
 
-  create = (req, res, next) => {
-    try {
-      const expense = this.expenseService.create(req.body || {}, req.user?.id);
-      res.status(201).json({ data: expense });
-    } catch (error) {
-      next(error);
-    }
-  };
+  create = respondData((req) => this.expenseService.create(req.body || {}, req.user?.id), 201);
 
-  update = (req, res, next) => {
-    try {
-      const expense = this.expenseService.update(
-        Number(req.params.id),
-        req.body || {},
-        req.user?.id,
-      );
-      res.status(200).json({ data: expense });
-    } catch (error) {
-      next(error);
-    }
-  };
+  update = respondData((req) =>
+    this.expenseService.update(Number(req.params.id), req.body || {}, req.user?.id),
+  );
 
-  delete = (req, res, next) => {
-    try {
-      res.status(200).json(this.expenseService.delete(Number(req.params.id), req.user?.id));
-    } catch (error) {
-      next(error);
-    }
-  };
+  delete = respond((req) => this.expenseService.delete(Number(req.params.id), req.user?.id));
 }

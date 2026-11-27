@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createAuthService } from '../auth/auth.routes.js';
 import { authenticate, requirePermission } from '../../shared/middleware/auth-middleware.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { respondData } from '../../shared/http/respond.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 
 // GST state codes (first two digits of a GSTIN).
@@ -172,27 +173,21 @@ export function createCompanySettingsRouter(db) {
   const requireAuth = authenticate(createAuthService(db));
 
   // Read stays open to local pages such as the printed job card; the API only listens on loopback.
-  router.get('/', (req, res, next) => {
-    try {
-      res.status(200).json({ status: 'success', data: service.get() });
-    } catch (error) {
-      next(error);
-    }
-  });
-  router.get('/states', (req, res) => {
-    res.status(200).json({
-      data: Object.entries(GST_STATES).map(([code, name]) => ({
-        code: String(code).padStart(2, '0'),
-        name,
-      })),
-    });
-  });
-  router.put('/', requireAuth, requirePermission('settings.write'), (req, res, next) => {
-    try {
-      res.status(200).json({ status: 'success', data: service.update(req.body, req.user.id) });
-    } catch (error) {
-      next(error);
-    }
-  });
+  router.get(
+    '/',
+    respondData(() => service.get()),
+  );
+  router.get(
+    '/states',
+    respondData(() =>
+      Object.entries(GST_STATES).map(([code, name]) => ({ code: code.padStart(2, '0'), name })),
+    ),
+  );
+  router.put(
+    '/',
+    requireAuth,
+    requirePermission('settings.write'),
+    respondData((req) => service.update(req.body, req.user.id)),
+  );
   return router;
 }

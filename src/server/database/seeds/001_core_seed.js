@@ -7,7 +7,6 @@ const roles = [
 
 const permissions = [
   ['users.manage', 'Create, update, and disable users.'],
-  ['roles.manage', 'Manage roles and permissions.'],
   ['customers.read', 'View customers.'],
   ['customers.write', 'Create and update customers.'],
   ['vehicles.read', 'View vehicles.'],
@@ -31,8 +30,6 @@ const permissions = [
   ['expenses.read', 'View expenses.'],
   ['expenses.write', 'Create and update expenses.'],
   ['gst.read', 'View GST reports.'],
-  ['gst.write', 'Modify GST settings and locked periods.'],
-  ['gst.export', 'Export GST data.'],
   ['profit.read', 'View profit records.'],
   ['tally.export', 'Export Tally data.'],
   ['dashboard.read', 'View dashboard analytics.'],
@@ -53,9 +50,7 @@ const rolePermissionKeys = {
   Admin: permissions.map(([key]) => key),
   Manager: permissions
     .map(([key]) => key)
-    .filter(
-      (key) => !['users.manage', 'roles.manage', 'backups.read', 'backups.write'].includes(key),
-    ),
+    .filter((key) => !['users.manage', 'backups.read', 'backups.write'].includes(key)),
   Mechanic: [
     'customers.read',
     'vehicles.read',
@@ -95,40 +90,14 @@ export async function run(db) {
 
   const linkPermission = db.prepare(`
     INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-    VALUES (?, ?)
+    SELECT roles.id, permissions.id FROM roles, permissions
+    WHERE roles.name = ? AND permissions.key = ?
   `);
 
-  const seedTransaction = db.transaction(() => {
-    for (const role of roles) {
-      insertRole.run(...role);
-    }
-
-    for (const permission of permissions) {
-      insertPermission.run(...permission);
-    }
-
-    for (const [roleName, permissionKeys] of Object.entries(rolePermissionKeys)) {
-      const role = db.prepare('SELECT id FROM roles WHERE name = ?').get(roleName);
-
-      for (const permissionKey of permissionKeys) {
-        const permission = db
-          .prepare('SELECT id FROM permissions WHERE key = ?')
-          .get(permissionKey);
-        linkPermission.run(role.id, permission.id);
-      }
-    }
-
-    db.prepare(
-      `
-      INSERT INTO warehouses (name, code, address)
-      VALUES ('Main Store', 'MAIN', 'Primary workshop store')
-      ON CONFLICT(code) DO UPDATE SET
-        name = excluded.name,
-        address = excluded.address,
-        updated_at = CURRENT_TIMESTAMP
-    `,
-    ).run();
-  });
-
-  seedTransaction();
+  db.transaction(() => {
+    for (const role of roles) insertRole.run(...role);
+    for (const permission of permissions) insertPermission.run(...permission);
+    for (const [roleName, permissionKeys] of Object.entries(rolePermissionKeys))
+      for (const permissionKey of permissionKeys) linkPermission.run(roleName, permissionKey);
+  })();
 }

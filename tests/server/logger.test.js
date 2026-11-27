@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { Logger, getLogger } from '../../src/server/shared/utils/logger.js';
 import { env } from '../../src/server/config/env.js';
+import { localDate } from '../../src/server/shared/utils/local-date.js';
 
 test('logger utility - 1. Log Directory Creation', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goldy-logger-test-'));
@@ -27,7 +28,7 @@ test('logger utility - 2. Log File Creation and Naming', () => {
     const logger = new Logger({ logsDir, logLevel: 'DEBUG' });
     logger.info('STARTUP', 'Logger test initialized');
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const expectedFilename = `goldy_erp_${today}.log`;
     const logFilePath = path.join(logsDir, expectedFilename);
 
@@ -45,7 +46,7 @@ test('logger utility - 3. Formatting', () => {
     const logger = new Logger({ logsDir, logLevel: 'INFO' });
     logger.info('MIGRATION', 'Migration applied successfully', { migrationId: 8 });
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const logFilePath = path.join(logsDir, `goldy_erp_${today}.log`);
     const content = fs.readFileSync(logFilePath, 'utf8');
 
@@ -73,7 +74,7 @@ test('logger utility - 4. Log Levels', () => {
     logger.warn('SYSTEM', 'This warning should be logged');
     logger.error('SYSTEM', 'This error should be logged');
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const logFilePath = path.join(logsDir, `goldy_erp_${today}.log`);
     const content = fs.readFileSync(logFilePath, 'utf8');
 
@@ -100,7 +101,7 @@ test('logger utility - 5. Multiple Sequential Writes & Ordering', () => {
     logger.info('SYSTEM', 'Second message');
     logger.info('SYSTEM', 'Third message');
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const logFilePath = path.join(logsDir, `goldy_erp_${today}.log`);
     const content = fs.readFileSync(logFilePath, 'utf8');
 
@@ -172,7 +173,7 @@ test('logger utility - 9. Configurable Level Filtering Behavior', () => {
       logger.warn('SYSTEM', 'warn msg');
       logger.error('SYSTEM', 'error msg');
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = localDate();
       const logFilePath = path.join(logsDir, `goldy_erp_${today}.log`);
       const content = fs.readFileSync(logFilePath, 'utf8');
 

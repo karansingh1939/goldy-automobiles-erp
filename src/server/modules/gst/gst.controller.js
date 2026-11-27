@@ -1,37 +1,15 @@
+import { respond } from '../../shared/http/respond.js';
+
 export class GstController {
   constructor(gstService) {
     this.gstService = gstService;
   }
 
-  summary = async (req, res, next) => {
-    try {
-      res.status(200).json(this.gstService.summary(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  summary = respond((req) => this.gstService.summary(req.query));
 
-  gstr1 = async (req, res, next) => {
-    try {
-      res.status(200).json(this.gstService.gstr1(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  gstr1 = respond((req) => this.gstService.gstr1(req.query));
 
-  gstr3b = async (req, res, next) => {
-    try {
-      res.status(200).json(this.gstService.gstr3b(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  gstr3b = respond((req) => this.gstService.gstr3b(req.query));
 
-  hsnSummary = async (req, res, next) => {
-    try {
-      res.status(200).json(this.gstService.hsnSummary(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  hsnSummary = respond((req) => this.gstService.hsnSummary(req.query));
 }

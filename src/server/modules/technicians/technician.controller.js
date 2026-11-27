@@ -1,75 +1,35 @@
+import { respond, respondData } from '../../shared/http/respond.js';
+
 export class TechnicianController {
   constructor(technicianService) {
     this.technicianService = technicianService;
   }
 
-  list = (req, res, next) => {
-    try {
-      res.status(200).json(this.technicianService.list(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  list = respond((req) => this.technicianService.list(req.query));
 
-  get = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.technicianService.get(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  get = respondData((req) => this.technicianService.get(Number(req.params.id)));
 
-  create = (req, res, next) => {
-    try {
-      res.status(201).json({ data: this.technicianService.create(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  create = respondData((req) => this.technicianService.create(req.body || {}, req.user?.id), 201);
 
-  update = (req, res, next) => {
-    try {
-      res.status(200).json({
-        data: this.technicianService.update(Number(req.params.id), req.body || {}, req.user?.id),
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
+  update = respondData((req) =>
+    this.technicianService.update(Number(req.params.id), req.body || {}, req.user?.id),
+  );
 
-  deactivate = (req, res, next) => {
-    try {
-      res
-        .status(200)
-        .json({ data: this.technicianService.deactivate(Number(req.params.id), req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
+  deactivate = respondData((req) =>
+    this.technicianService.deactivate(Number(req.params.id), req.user?.id),
+  );
 
-  assignToJobCard = (req, res, next) => {
-    try {
-      const { jobCardId, notes } = req.body || {};
-      res.status(200).json({
-        data: this.technicianService.assignToJobCard(
-          Number(jobCardId),
-          Number(req.params.id),
-          req.user?.id,
-          notes,
-        ),
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
+  assignToJobCard = respondData((req) => {
+    const { jobCardId, notes } = req.body || {};
+    return this.technicianService.assignToJobCard(
+      Number(jobCardId),
+      Number(req.params.id),
+      req.user?.id,
+      notes,
+    );
+  });
 
-  getHistory = (req, res, next) => {
-    try {
-      res
-        .status(200)
-        .json(this.technicianService.getHistoryAndMetrics(Number(req.params.id), req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
+  getHistory = respond((req) =>
+    this.technicianService.getHistoryAndMetrics(Number(req.params.id), req.query),
+  );
 }

@@ -5,16 +5,14 @@ import { AccountingPostingEngine } from './posting-engine.service.js';
 import { AllocationService } from './allocation.service.js';
 import { CustomerReceiptService } from './customer-receipt.service.js';
 import { SupplierPaymentService } from './supplier-payment.service.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
+import { insertLedger, LedgerGroup, systemLedgerId } from './ledgers.js';
 
 /**
  * Plain-language money screens for a non-accountant owner. Every entry is
  * posted through the double-entry posting engine (balanced, period-locked,
  * numbered); this service only chooses the right accounts.
  */
-
-const CURRENT_ASSETS_GROUP = 2;
-const NON_CURRENT_LIABILITIES_GROUP = 6;
-const INDIRECT_INCOME_GROUP = 10;
 
 // Where "other" money comes from or goes to, in owner's words.
 const OTHER_PARTIES = {
@@ -28,11 +26,6 @@ const OTHER_PARTIES = {
     loan: { label: 'Loan repaid', systemKey: 'loans_payable' },
     expense: { label: 'Other expense', systemKey: 'misc_expense' },
   },
-};
-const LAZY_LEDGERS = {
-  loans_payable: { name: 'Loans', group: NON_CURRENT_LIABILITIES_GROUP, nature: 'Credit' },
-  other_income: { name: 'Other Income', group: INDIRECT_INCOME_GROUP, nature: 'Credit' },
-  staff_advances: { name: 'Staff Advances', group: CURRENT_ASSETS_GROUP, nature: 'Debit' },
 };
 
 // Entries made by another screen are cancelled there, so their stock or bill
@@ -49,7 +42,6 @@ const CANCEL_ELSEWHERE = {
   fixed_assets: 'Fixed assets',
 };
 
-const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
 const fail = (message, code = 'VALIDATION_ERROR', status = 400) => {
   throw new AppError(message, status, code);
 };
@@ -104,7 +96,13 @@ export class MoneyService {
             "SELECT COUNT(*) AS n FROM ledgers WHERE company_id = ? AND system_key LIKE 'bank_%'",
           )
           .get(this.companyId).n + 1;
-      const id = this.insertLedger(clean, CURRENT_ASSETS_GROUP, 'Debit', `bank_${next}`);
+      const id = insertLedger(this.db, {
+        name: clean,
+        groupId: LedgerGroup.CURRENT_ASSETS,
+        nature: 'Debit',
+        systemKey: `bank_${next}`,
+        companyId: this.companyId,
+      });
       this.auditRepository.create({
         userId,
         action: 'CREATE',
@@ -413,28 +411,8 @@ export class MoneyService {
     return result;
   }
 
+  /** A system ledger by key (made on first use for loans, other income, staff advances). */
   ledgerForKey(systemKey) {
-    const existing = this.db
-      .prepare('SELECT id FROM ledgers WHERE company_id = ? AND system_key = ?')
-      .get(this.companyId, systemKey);
-    if (existing) return existing.id;
-    const spec = LAZY_LEDGERS[systemKey];
-    if (!spec) fail(`Account ${systemKey} is missing.`, 'LEDGER_NOT_FOUND', 500);
-    return this.insertLedger(spec.name, spec.group, spec.nature, systemKey);
-  }
-
-  insertLedger(name, groupId, nature, systemKey) {
-    const id = this.db
-      .prepare(
-        `INSERT INTO ledgers (company_id, name, group_id, opening_balance, nature, is_system, system_key)
-         VALUES (?, ?, ?, 0, ?, 1, ?)`,
-      )
-      .run(this.companyId, name, groupId, nature, systemKey).lastInsertRowid;
-    this.db
-      .prepare(
-        'INSERT OR IGNORE INTO ledger_balances (company_id, ledger_id, running_balance) VALUES (?, ?, 0)',
-      )
-      .run(this.companyId, id);
-    return Number(id);
+    return systemLedgerId(this.db, systemKey, this.companyId);
   }
 }

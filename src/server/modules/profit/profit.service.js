@@ -1,95 +1,20 @@
-import { localDate } from '../../shared/utils/local-date.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { ProfitRepository } from './profit.repository.js';
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-function money(value) {
-  return Math.round(Number(value || 0) * 100) / 100;
-}
-
-function todayString() {
-  return localDate();
-}
-
-function firstDayOfMonth(dateText) {
-  return `${dateText.slice(0, 7)}-01`;
-}
-
-function firstDayOfYear(dateText) {
-  return `${dateText.slice(0, 4)}-01-01`;
-}
-
-function normalizePeriod(period) {
-  if (!period) {
-    return null;
-  }
-
-  return String(period)
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_');
-}
-
-function normalizeDate(value, label) {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-
-  const date = String(value).trim();
-  if (!isoDatePattern.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00.000Z`))) {
-    throw new AppError(`${label} must be a valid YYYY-MM-DD date.`, 400, 'VALIDATION_ERROR');
-  }
-
-  return date;
-}
-
-function parseFilters(query = {}) {
-  const period = normalizePeriod(query.period);
-  const today = todayString();
-  let dateFrom = normalizeDate(query.dateFrom ?? query.from, 'Date from');
-  let dateTo = normalizeDate(query.dateTo ?? query.to, 'Date to');
-
-  if (period === 'today') {
-    dateFrom = today;
-    dateTo = today;
-  } else if (period === 'this_month') {
-    dateFrom = firstDayOfMonth(today);
-    dateTo = today;
-  } else if (period === 'this_year') {
-    dateFrom = firstDayOfYear(today);
-    dateTo = today;
-  } else if (period === 'custom') {
-    if (!dateFrom || !dateTo) {
-      throw new AppError('Custom range requires dateFrom and dateTo.', 400, 'VALIDATION_ERROR');
-    }
-  } else if (period) {
-    throw new AppError('Profit report period is invalid.', 400, 'VALIDATION_ERROR');
-  }
-
-  if (dateFrom && dateTo && dateFrom > dateTo) {
-    throw new AppError('Date range is invalid.', 400, 'VALIDATION_ERROR');
-  }
-
-  return {
-    period,
-    dateFrom,
-    dateTo,
-  };
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
+import { parseReportPeriod } from '../../shared/utils/report-period.js';
 
 function totalsRow(row) {
-  const revenue = money(row.revenue);
-  const cost = money(row.cost);
-  const grossProfit = money(row.gross_profit ?? row.profit ?? revenue - cost);
-  const totalExpenses = money(row.total_expenses ?? row.expenses);
+  const revenue = roundMoney(row.revenue);
+  const cost = roundMoney(row.cost);
+  const grossProfit = roundMoney(row.gross_profit ?? row.profit ?? revenue - cost);
+  const totalExpenses = roundMoney(row.total_expenses ?? row.expenses);
 
   return {
     totalRevenue: revenue,
     totalCost: cost,
     grossProfit,
     totalExpenses,
-    netProfit: money(grossProfit - totalExpenses),
+    netProfit: roundMoney(grossProfit - totalExpenses),
   };
 }
 
@@ -99,7 +24,7 @@ export class ProfitService {
   }
 
   summary(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'Profit report');
     return {
       filters,
       data: totalsRow(this.repository.summary(filters)),
@@ -107,21 +32,21 @@ export class ProfitService {
   }
 
   byCustomer(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'Profit report');
     return {
       filters,
       data: this.repository.profitByCustomer(filters).map((row) => ({
         customerId: row.customer_id,
         customer: row.customer,
-        revenue: money(row.revenue),
-        cost: money(row.cost),
-        profit: money(row.profit),
+        revenue: roundMoney(row.revenue),
+        cost: roundMoney(row.cost),
+        profit: roundMoney(row.profit),
       })),
     };
   }
 
   tallyExport(query = {}) {
-    const filters = parseFilters(query);
+    const filters = parseReportPeriod(query, 'Profit report');
     const exportType = query.type || 'sales';
     if (!['sales', 'all'].includes(exportType)) {
       throw new AppError('Tally export type must be sales or all.', 400, 'VALIDATION_ERROR');
@@ -261,7 +186,7 @@ export class ProfitService {
           xml += `            </ALLLEDGERENTRIES.LIST>\n`;
         }
 
-        const roundOff = money(
+        const roundOff = roundMoney(
           Number(grandTotal) -
             Number(taxableAmount) -
             Number(cgstTotal) -

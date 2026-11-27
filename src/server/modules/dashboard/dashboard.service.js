@@ -1,27 +1,8 @@
-import { localDate } from '../../shared/utils/local-date.js';
-import { AppError } from '../../shared/errors/app-error.js';
+import { localDate, monthStart } from '../../shared/utils/local-date.js';
 import { DashboardRepository } from './dashboard.repository.js';
 import { ProfitService } from '../profit/profit.service.js';
 import { InventoryService } from '../inventory/inventory.service.js';
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-function normalizeDate(value, label) {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-
-  const date = String(value).trim();
-  if (!isoDatePattern.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00.000Z`))) {
-    throw new AppError(`${label} must be a valid YYYY-MM-DD date.`, 400, 'VALIDATION_ERROR');
-  }
-
-  return date;
-}
-
-function firstDayOfMonth(dateText) {
-  return `${dateText.slice(0, 7)}-01`;
-}
+import { optionalDate } from '../../shared/utils/validation.js';
 
 export class DashboardService {
   constructor(db) {
@@ -31,7 +12,7 @@ export class DashboardService {
   }
 
   getOperationsMetrics(todayDate) {
-    let date = normalizeDate(todayDate, 'Today date');
+    let date = optionalDate(todayDate, 'Today date');
     if (!date) {
       date = localDate();
     }
@@ -39,7 +20,7 @@ export class DashboardService {
   }
 
   getFinancialMetrics(todayDate) {
-    let date = normalizeDate(todayDate, 'Today date');
+    let date = optionalDate(todayDate, 'Today date');
     if (!date) {
       date = localDate();
     }
@@ -52,7 +33,7 @@ export class DashboardService {
 
     const monthData = this.profitService.summary({
       period: 'custom',
-      dateFrom: firstDayOfMonth(date),
+      dateFrom: monthStart(date),
       dateTo: date,
     }).data;
 
@@ -91,13 +72,13 @@ export class DashboardService {
   }
 
   getSalesMetrics(todayDate) {
-    let date = normalizeDate(todayDate, 'Today date');
+    let date = optionalDate(todayDate, 'Today date');
     if (!date) {
       date = localDate();
     }
 
     const todaySummary = this.repository.getSalesSummary(date, date);
-    const monthSummary = this.repository.getSalesSummary(firstDayOfMonth(date), date);
+    const monthSummary = this.repository.getSalesSummary(monthStart(date), date);
 
     const invoicesToday = todaySummary.count;
     const invoicesThisMonth = monthSummary.count;
@@ -111,7 +92,7 @@ export class DashboardService {
     const topCustomers = this.profitService
       .byCustomer({
         period: 'custom',
-        dateFrom: firstDayOfMonth(date),
+        dateFrom: monthStart(date),
         dateTo: date,
       })
       .data.slice(0, 5);

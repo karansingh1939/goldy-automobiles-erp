@@ -31,14 +31,13 @@ export function requirePermission(permissionKey) {
       return next(new AppError('Authentication is required.', 401, 'AUTH_REQUIRED'));
     }
 
-    const roleName = req.user.role?.name || '';
+    const roleName = (req.user.role?.name || '').toLowerCase();
     if (
-      roleName.toLowerCase() === 'admin' ||
-      roleName.toLowerCase() === 'administrator' ||
+      roleName === 'admin' ||
+      roleName === 'administrator' ||
       req.user.permissions.includes(permissionKey)
-    ) {
+    )
       return next();
-    }
 
     return next(
       new AppError('You do not have permission to perform this action.', 403, 'PERMISSION_DENIED'),

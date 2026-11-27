@@ -1,9 +1,6 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import { recordSupplierLedgerEntry } from '../purchasing/supplier-ledger.js';
-
-function roundMoney(val) {
-  return Math.round(val * 100) / 100;
-}
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 function recordSupplierLedger(db, { supplierId, date, paymentId, debit, credit, notes, userId }) {
   recordSupplierLedgerEntry(db, {
@@ -233,38 +230,6 @@ export class SupplierPaymentService {
       ...payment,
       allocations,
     };
-  }
-
-  /**
-   * Lists supplier payments with filters.
-   */
-  listPayments(filters = {}) {
-    const { supplierId, startDate, endDate } = filters;
-    let sql = `
-      SELECT p.*, s.name AS supplier_name
-      FROM supplier_payments p
-      JOIN suppliers s ON p.supplier_id = s.id
-      WHERE 1=1
-    `;
-    const params = [];
-
-    if (supplierId) {
-      sql += ' AND p.supplier_id = ?';
-      params.push(supplierId);
-    }
-
-    if (startDate) {
-      sql += ' AND p.payment_date >= ?';
-      params.push(startDate);
-    }
-
-    if (endDate) {
-      sql += ' AND p.payment_date <= ?';
-      params.push(endDate);
-    }
-
-    sql += ' ORDER BY p.payment_date DESC, p.id DESC';
-    return this.db.prepare(sql).all(...params);
   }
 
   /**

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { AppError } from '../shared/errors/app-error.js';
 import { HealthState } from './integrity-check-service.js';
@@ -26,8 +27,7 @@ export class MigrationService {
     this.migrationRepository = migrationRepository;
     this.integrityCheckService = integrityCheckService;
     this.backupService = backupService;
-    this.migrationsDir =
-      migrationsDir || path.join(path.dirname(new URL(import.meta.url).pathname), 'migrations');
+    this.migrationsDir = migrationsDir || fileURLToPath(new URL('./migrations', import.meta.url));
     this.appVersion = appVersion;
   }
 
@@ -46,9 +46,7 @@ export class MigrationService {
    */
   runMigrations() {
     // 0. Trigger automatic daily silent database backup check
-    if (this.backupService && typeof this.backupService.checkAndRunDailyBackup === 'function') {
-      this.backupService.checkAndRunDailyBackup();
-    }
+    this.backupService?.checkAndRunDailyBackup?.();
 
     // 1. Scan migrations directory
     if (!fs.existsSync(this.migrationsDir)) {
@@ -128,18 +126,7 @@ export class MigrationService {
     }
 
     // 6. Check if there are any pending migrations to execute
-    let hasPending = false;
-    for (const filename of migrationFiles) {
-      if (!appliedMap.has(filename)) {
-        hasPending = true;
-        break;
-      }
-    }
-
-    // If there are no pending migrations, return immediately (fast path)
-    if (!hasPending) {
-      return [];
-    }
+    if (migrationFiles.every((filename) => appliedMap.has(filename))) return [];
 
     // 7. Execute physical database integrity check first (only if migrations are pending)
     const health = this.integrityCheckService.check(this.db);
@@ -153,12 +140,10 @@ export class MigrationService {
 
     // 8. Trigger pre-migration backup hook if available (only if migrations are pending)
     let preMigrationBackupPath = null;
-    if (this.backupService && typeof this.backupService.createBackup === 'function') {
+    if (this.backupService?.createBackup) {
       try {
         preMigrationBackupPath = this.backupService.createBackup({ label: 'PRE_MIGRATION' });
-        if (typeof this.backupService.verifyBackup === 'function') {
-          this.backupService.verifyBackup(preMigrationBackupPath);
-        }
+        if (preMigrationBackupPath) this.backupService.verifyBackup?.(preMigrationBackupPath);
       } catch (backupErr) {
         throw new AppError(
           `Pre-migration safety backup failed: ${backupErr.message}`,
@@ -223,29 +208,25 @@ export class MigrationService {
         if (needsForeignKeyToggle) {
           try {
             this.db.pragma('foreign_keys = ON');
-          } catch (pragmaErr) {
-            // Best-effort cleanup; preserve the original operation result.
+          } catch {
+            // Best effort; the original error is reported below.
           }
         }
 
         console.error(`Migration execution failed on ${filename}:`, err.message);
 
         // Automatic Rollback to Pre-Migration Backup State
-        if (preMigrationBackupPath && preMigrationBackupPath !== 'in_memory_mock_backup') {
+        if (preMigrationBackupPath) {
           try {
             console.warn(`Restoring database from pre-migration backup: ${preMigrationBackupPath}`);
             const dbPath = this.db.name;
             try {
               this.db.close();
-            } catch (closeErr) {
-              // Best-effort cleanup; preserve the original operation result.
+            } catch {
+              // Already closed or unusable; the copy below replaces it anyway.
             }
-
-            // Clean WAL and SHM files to prevent recovery log issues
-            const walPath = `${dbPath}-wal`;
-            const shmPath = `${dbPath}-shm`;
-            if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
-            if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+            // Old WAL/SHM side files would replay over the restored copy.
+            for (const suffix of ['-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });
 
             fs.copyFileSync(preMigrationBackupPath, dbPath);
 

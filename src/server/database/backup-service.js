@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { localDate } from '../shared/utils/local-date.js';
 
 export function getBackupDirectory(dbPath) {
   const resolved = path.resolve(dbPath);
@@ -27,175 +27,100 @@ export function isManagedBackup(filePath, directory) {
   return !fs.existsSync(resolved) || !fs.lstatSync(resolved).isSymbolicLink();
 }
 
+/** Local date and time as YYYY-MM-DD_HH-mm-ss, so file names sort by age. */
+function stamp(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${localDate(now)}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
+const KEEP_BACKUPS = 30;
+
+/**
+ * Startup safety copies: one silent copy a day and one before every upgrade,
+ * kept in the database's own backups folder (newest 30 kept).
+ */
 export class BackupService {
-  /**
-   * @param {object} db - Active better-sqlite3 database connection
-   */
   constructor(db) {
-    if (!db) {
-      throw new Error('Database connection is required for BackupService');
-    }
+    if (!db) throw new Error('Database connection is required for BackupService');
     this.db = db;
   }
 
-  /**
-   * Creates a backup copy of the database file in the backups folder.
-   * Handles in-memory databases gracefully.
-   * @param {object} options - Options containing label
-   * @returns {string} The path to the created backup file
-   */
-  createBackup({ label = 'BACKUP' } = {}) {
+  /** This database's backups folder; null for an in-memory database. */
+  backupsDir() {
     const dbPath = this.db.name;
-
-    // In-memory databases cannot be physically backed up via copying
-    if (!dbPath || dbPath === ':memory:') {
-      return 'in_memory_mock_backup';
-    }
-
-    const resolvedDbPath = path.resolve(dbPath);
-    const backupsDir = getBackupDirectory(resolvedDbPath);
-
-    // Ensure backups directory exists
-    if (!fs.existsSync(backupsDir)) {
-      fs.mkdirSync(backupsDir, { recursive: true });
-    }
-
-    // Format timestamp as YYYY-MM-DD_HH-mm-ss
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-
-    const backupFilename = `goldy_backup_${timestamp}_${label.replace(/[^a-zA-Z0-9_-]/g, '_')}_${randomUUID()}.db`;
-    const targetBackupPath = path.join(backupsDir, backupFilename);
-
-    // SQLite creates a consistent snapshot including committed pages still in the WAL.
-    this.db.prepare('VACUUM INTO ?').run(targetBackupPath);
-
-    return targetBackupPath;
+    return !dbPath || dbPath === ':memory:' ? null : getBackupDirectory(dbPath);
   }
 
-  /**
-   * Verifies the backup database file integrity.
-   * @param {string} filePath - Path to backup file
-   * @returns {boolean} True if valid
-   */
+  /** Copies the database (including committed WAL pages); null for an in-memory database. */
+  createBackup({ label = 'BACKUP' } = {}) {
+    const dir = this.backupsDir();
+    if (!dir) return null;
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(
+      dir,
+      `goldy_backup_${stamp()}_${label.replace(/[^a-zA-Z0-9_-]/g, '_')}_${randomUUID()}.db`,
+    );
+    this.db.prepare('VACUUM INTO ?').run(file);
+    return file;
+  }
+
+  /** Throws unless the file is a non-empty SQLite database that passes integrity_check. */
   verifyBackup(filePath) {
-    if (filePath === 'in_memory_mock_backup') {
-      return true;
-    }
-
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Backup file does not exist: ${filePath}`);
-    }
-
-    const size = fs.statSync(filePath).size;
-    if (size === 0) {
-      throw new Error(`Backup file is empty: ${filePath}`);
-    }
-
-    let tempDb;
+    if (!fs.existsSync(filePath)) throw new Error(`Backup file does not exist: ${filePath}`);
+    if (fs.statSync(filePath).size === 0) throw new Error(`Backup file is empty: ${filePath}`);
+    let copy;
     try {
-      // Attempt to open and verify the SQLite database copy
-      tempDb = new Database(filePath, { readonly: true });
-      const check = tempDb.pragma('integrity_check');
-      if (!check || check.length === 0 || check[0].integrity_check !== 'ok') {
-        throw new Error(`Integrity check failed: ${check?.[0]?.integrity_check || 'corrupted'}`);
-      }
+      copy = new Database(filePath, { readonly: true });
+      const result = copy.pragma('integrity_check', { simple: true });
+      if (result !== 'ok') throw new Error(`Integrity check failed: ${result || 'corrupted'}`);
       return true;
     } catch (err) {
       throw new Error(`Backup SQLite integrity verification failed: ${err.message}`);
     } finally {
-      if (tempDb) {
-        tempDb.close();
-      }
+      copy?.close();
     }
   }
 
-  /**
-   * Enforces backup retention policy by keeping only the latest 30 backups.
-   */
+  /** Deletes all but the newest 30 startup copies. */
   enforceRetentionPolicy() {
-    const dbPath = this.db.name;
-    if (!dbPath || dbPath === ':memory:') {
-      return;
-    }
-
-    const resolvedDbPath = path.resolve(dbPath);
-    const backupsDir = getBackupDirectory(resolvedDbPath);
-
-    if (!fs.existsSync(backupsDir)) {
-      return;
-    }
-
-    // List all goldy backup files
+    const dir = this.backupsDir();
+    if (!dir || !fs.existsSync(dir)) return;
     const files = fs
-      .readdirSync(backupsDir)
-      .filter(
-        (f) =>
-          f.startsWith('goldy_backup_') && isManagedBackup(path.join(backupsDir, f), backupsDir),
-      )
-      .sort(); // Alphabetic sort is chronological due to YYYY-MM-DD_HH-mm-ss format
-
-    const retentionLimit = 30;
-    if (files.length <= retentionLimit) {
-      return;
-    }
-
-    // Delete oldest backups
-    const toDeleteCount = files.length - retentionLimit;
-    for (let i = 0; i < toDeleteCount; i++) {
-      const filePath = path.join(backupsDir, files[i]);
+      .readdirSync(dir)
+      .filter((f) => f.startsWith('goldy_backup_') && isManagedBackup(path.join(dir, f), dir))
+      .sort(); // names start with the date and time, so this is oldest first
+    for (const file of files.slice(0, -KEEP_BACKUPS)) {
       try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
+        fs.rmSync(path.join(dir, file), { force: true });
       } catch (err) {
-        console.warn(`Failed to clean up old backup file ${filePath}:`, err.message);
+        console.warn(`Failed to clean up old backup file ${file}:`, err.message);
       }
     }
   }
 
-  /**
-   * Checks if a silent backup was already performed today. If not, performs one.
-   */
+  /** Makes today's silent copy unless a valid one already exists. */
   checkAndRunDailyBackup() {
-    const dbPath = this.db.name;
-    if (!dbPath || dbPath === ':memory:') {
-      return;
-    }
-
-    const resolvedDbPath = path.resolve(dbPath);
-    const backupsDir = getBackupDirectory(resolvedDbPath);
-
-    if (!fs.existsSync(backupsDir)) {
-      fs.mkdirSync(backupsDir, { recursive: true });
-    }
-
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const todayPrefix = `goldy_backup_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-
-    // Scan for any backup made today
-    const files = fs.readdirSync(backupsDir);
-    const hasDailyBackup = files.some((f) => {
-      const file = path.join(backupsDir, f);
-      if (!f.startsWith(todayPrefix) || !isManagedBackup(file, backupsDir)) return false;
+    const dir = this.backupsDir();
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const todayPrefix = `goldy_backup_${localDate()}`;
+    const hasDailyBackup = fs.readdirSync(dir).some((f) => {
+      const file = path.join(dir, f);
+      if (!f.startsWith(todayPrefix) || !isManagedBackup(file, dir)) return false;
       try {
         return this.verifyBackup(file);
       } catch {
         return false;
       }
     });
-
-    if (!hasDailyBackup) {
-      try {
-        const backupPath = this.createBackup({ label: 'DAILY' });
-        this.verifyBackup(backupPath);
-        this.enforceRetentionPolicy();
-        console.log(`Automatic daily silent backup created successfully at: ${backupPath}`);
-      } catch (err) {
-        console.error('Automatic daily silent backup failed:', err.message);
-      }
+    if (hasDailyBackup) return;
+    try {
+      const backupPath = this.createBackup({ label: 'DAILY' });
+      this.verifyBackup(backupPath);
+      this.enforceRetentionPolicy();
+      console.log(`Automatic daily silent backup created successfully at: ${backupPath}`);
+    } catch (err) {
+      console.error('Automatic daily silent backup failed:', err.message);
     }
   }
 }

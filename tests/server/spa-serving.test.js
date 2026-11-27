@@ -7,46 +7,25 @@ import { createTestContext } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-test('retired workshop pages preserve authenticated links and record selectors into React', async () => {
+test('the printable job card page needs a signed-in session', async () => {
   const context = await createTestContext();
   try {
     const login = await context.request('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username: 'admin', password: 'Admin@12345' }),
     });
-    for (const [legacy, target] of [
-      ['audit-logs', 'audit-logs'],
-      ['tally-export', 'reports'],
-      ['dashboard', ''],
-      ['assets', 'assets'],
-      ['expenses', 'expenses'],
-      ['gst-reports', 'reports'],
-      ['inventory', 'inventory'],
-      ['invoices', 'invoices'],
-      ['job-cards', 'job-cards'],
-      ['masters', 'masters'],
-      ['purchasing', 'purchasing'],
-      ['service-history', 'service-history'],
-      ['settings', 'settings'],
-      ['stock-verification', 'stock-verification'],
-      ['supplier-ledger', 'supplier-ledger'],
-      ['technicians', 'technicians'],
-    ]) {
-      const anonymous = await context.request(`/${legacy}.html`, { redirect: 'manual' });
-      assert.equal(anonymous.response.status, 302);
-      assert.equal(anonymous.response.headers.get('location'), '/index.html');
-      const authenticated = await context.request(`/${legacy}.html`, {
-        redirect: 'manual',
-        headers: { Cookie: `goldy_session_token=${login.body.token}` },
-      });
-      assert.equal(authenticated.response.status, 302);
-      assert.equal(authenticated.response.headers.get('location'), `/index.html#/${target}`);
-    }
-    const record = await context.request('/invoices.html?id=42', {
+    const anonymous = await context.request('/print-job-card.html?id=1', { redirect: 'manual' });
+    assert.equal(anonymous.response.status, 302);
+    assert.equal(anonymous.response.headers.get('location'), '/index.html');
+    const signedIn = await context.request('/print-job-card.html?id=1', {
       redirect: 'manual',
       headers: { Cookie: `goldy_session_token=${login.body.token}` },
     });
-    assert.equal(record.response.headers.get('location'), '/index.html#/invoices?id=42');
+    assert.equal(signedIn.response.status, 200);
+    assert.equal(
+      signedIn.response.headers.get('cache-control'),
+      'no-store, no-cache, must-revalidate',
+    );
   } finally {
     await context.close();
   }

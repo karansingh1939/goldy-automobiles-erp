@@ -15,11 +15,7 @@ export async function run(db) {
       updated_at = CURRENT_TIMESTAMP
   `);
 
-  const transaction = db.transaction(() => {
-    for (const warehouse of warehouses) {
-      insertWarehouse.run(...warehouse);
-    }
-  });
-
-  transaction();
+  db.transaction(() => {
+    for (const warehouse of warehouses) insertWarehouse.run(...warehouse);
+  })();
 }

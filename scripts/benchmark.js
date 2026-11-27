@@ -8,17 +8,10 @@ import { AccountingReportService } from '../src/server/modules/accounting/accoun
 import { ReconciliationService } from '../src/server/modules/accounting/reconciliation.service.js';
 import { DirectBillingService } from '../src/server/modules/accounting/direct-billing.service.js';
 import { CustomerReceiptService } from '../src/server/modules/accounting/customer-receipt.service.js';
-import { SalesOrderService } from '../src/server/modules/sales-orders/sales-order.service.js';
 
 // Setup file paths
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goldy-benchmark-'));
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-}
 const dbPath = path.join(tempDir, 'benchmark.sqlite');
-if (fs.existsSync(dbPath)) {
-  fs.unlinkSync(dbPath);
-}
 
 console.log('Initializing stress benchmark database...');
 const db = new Database(dbPath);
@@ -43,25 +36,22 @@ const reportService = new AccountingReportService(db);
 const reconciliationService = new ReconciliationService(db);
 const directBillingService = new DirectBillingService(db);
 const receiptService = new CustomerReceiptService(db);
-const salesOrderService = new SalesOrderService(db);
 
 const metrics = {
   customerCount: 10000,
   itemCount: 10000,
   invoiceCount: 25000,
   receiptCount: 10000,
-  salesOrderCount: 1000,
   databaseSizeMB: 0,
   durations: {
     seedingCustomers: 0,
     seedingInventory: 0,
     postingInvoices: 0,
     postingReceipts: 0,
-    salesOrderCycles: 0,
     trialBalance: 0,
     profitLoss: 0,
     balanceSheet: 0,
-    ledgerStatement: 0,
+    voucherList: 0,
     reconciliationScan: 0,
   },
   results: {
@@ -164,62 +154,6 @@ try {
   })();
   metrics.durations.postingReceipts = Date.now() - t3;
 
-  // 4b. Benchmark Quotation -> Sales Order -> Reservation -> Fulfillment -> Invoice
-  console.log(`Processing ${metrics.salesOrderCount} Quotation to Invoice lifecycles...`);
-  const t4 = Date.now();
-  db.transaction(() => {
-    for (let i = 1; i <= metrics.salesOrderCount; i++) {
-      const custId = ((i - 1) % metrics.customerCount) + 1;
-      const itemId = maxBefore + (((i - 1) % metrics.itemCount) + 1);
-
-      // Create quote
-      const quote = salesOrderService.createQuotation(
-        {
-          customerId: custId,
-          quotationDate: '2026-06-20',
-          validUntil: '2026-07-20',
-          items: [{ itemId, quantity: 1, unitPrice: 150, gstRate: 18 }],
-        },
-        1,
-      );
-
-      // Revise quote
-      const revision = salesOrderService.reviseQuotation(
-        quote.id,
-        {
-          items: [{ itemId, quantity: 2, unitPrice: 150, gstRate: 18 }],
-        },
-        1,
-      );
-
-      // Accept / Convert quote
-      const order = salesOrderService.convertQuotationToSalesOrder(
-        revision.id,
-        {
-          warehouseId: 1,
-        },
-        1,
-      );
-
-      // Confirm (allocates reservation)
-      const confirmed = salesOrderService.confirmSalesOrder(order.id, 1);
-
-      // Shipment (dispatches stock)
-      const shipment = salesOrderService.createShipment(
-        confirmed.id,
-        {
-          shipmentDate: '2026-06-22',
-          items: [{ salesOrderItemId: confirmed.items[0].id, quantity: 2 }],
-        },
-        1,
-      );
-
-      // Invoice shipment
-      salesOrderService.createInvoiceForShipment(shipment.id, 1);
-    }
-  })();
-  metrics.durations.salesOrderCycles = Date.now() - t4;
-
   // 5. Gather row counts
   const totalVouchers = db.prepare('SELECT COUNT(*) as count FROM vouchers').get().count;
   const totalJournals = db.prepare('SELECT COUNT(*) as count FROM journal_entries').get().count;
@@ -249,8 +183,8 @@ try {
   metrics.results.bsBalanced = bs.totals.isBalanced;
 
   const lT0 = Date.now();
-  reportService.getLedgerStatement(1, 1, '2026-06-01', '2026-06-30');
-  metrics.durations.ledgerStatement = Date.now() - lT0;
+  reportService.listVouchers({ startDate: '2026-06-01', endDate: '2026-06-30' }, 1);
+  metrics.durations.voucherList = Date.now() - lT0;
 
   const rT0 = Date.now();
   const recon = reconciliationService.runReconciliation(1);
@@ -277,13 +211,12 @@ This report summarizes stress benchmark measurements performed on a simulated hi
 - **Inventory Seeding**: ${metrics.durations.seedingInventory} ms (${Math.round(metrics.itemCount / (metrics.durations.seedingInventory / 1000))} inserts/sec)
 - **Invoice Generation**: ${metrics.durations.postingInvoices} ms (${Math.round(metrics.invoiceCount / (metrics.durations.postingInvoices / 1000))} vouchers/sec)
 - **Receipt Postings & FIFO Allocations**: ${metrics.durations.postingReceipts} ms (${Math.round(metrics.receiptCount / (metrics.durations.postingReceipts / 1000))} receipts/sec)
-- **Sales Order Lifecycles (Quote -> Revise -> Confirm -> Ship -> Invoice)**: ${metrics.durations.salesOrderCycles} ms (${Math.round(metrics.salesOrderCount / (metrics.durations.salesOrderCycles / 1000))} orders/sec)
 
 ## 3. Financial Reporting Latencies (Read Benchmark)
 - **Trial Balance Compilation**: **${metrics.durations.trialBalance} ms** (Balanced: \`${metrics.results.tbBalanced}\`)
 - **Profit & Loss Aggregation**: **${metrics.durations.profitLoss} ms**
 - **Balance Sheet Compilation**: **${metrics.durations.balanceSheet} ms** (Balanced: \`${metrics.results.bsBalanced}\`)
-- **Ledger Statement Query**: **${metrics.durations.ledgerStatement} ms**
+- **Voucher List (Accounts screen)**: **${metrics.durations.voucherList} ms**
 - **System Reconciliation Audit**: **${metrics.durations.reconciliationScan} ms** (Healthy: \`${metrics.results.reconciliationHealthy}\`)
 
 ## 4. Engineering Conclusion
@@ -297,10 +230,5 @@ Measurements above reflect this run and machine; compare repeated runs before dr
   console.log(`Stress benchmark complete. Report written to ${artifactPath}`);
 } finally {
   db.close();
-  try {
-    fs.unlinkSync(dbPath);
-    fs.rmdirSync(tempDir);
-  } catch (e) {
-    // Best-effort cleanup; preserve the original operation result.
-  }
+  fs.rmSync(tempDir, { recursive: true, force: true });
 }

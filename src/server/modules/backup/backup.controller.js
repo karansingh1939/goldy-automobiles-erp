@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { getBackupDirectory } from '../../database/backup-service.js';
 import { AppError } from '../../shared/errors/app-error.js';
+import { respond, respondData } from '../../shared/http/respond.js';
 
 export class BackupController {
   constructor(backupService, restoreService, backupScheduler) {
@@ -12,55 +13,24 @@ export class BackupController {
     this.backupScheduler = backupScheduler;
   }
 
-  health = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.backupService.getHealth() });
-    } catch (error) {
-      next(error);
-    }
-  };
+  health = respondData(() => this.backupService.getHealth());
 
-  manualBackup = async (req, res, next) => {
-    try {
-      const backupLog = await this.backupService.backupDatabase({
+  manualBackup = respondData(
+    async (req) =>
+      await this.backupService.backupDatabase({
         type: 'MANUAL',
         userId: req.user?.id,
-      });
-      res.status(201).json({ data: backupLog });
-    } catch (error) {
-      next(error);
-    }
-  };
-  list = (req, res, next) => {
-    try {
-      res.status(200).json(this.backupService.list(req.query));
-    } catch (error) {
-      next(error);
-    }
-  };
-  verifyBackup = async (req, res, next) => {
-    try {
-      res.json({ data: await this.backupService.verifyBackup(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
-  getSettings = (req, res, next) => {
-    try {
-      res.status(200).json({ status: 'success', data: this.backupService.getSettings() });
-    } catch (error) {
-      next(error);
-    }
-  };
-  updateSettings = (req, res, next) => {
-    try {
-      const settings = this.backupService.updateSettings(req.body);
-      this.backupScheduler?.restart();
-      res.status(200).json({ status: 'success', data: settings });
-    } catch (error) {
-      next(error);
-    }
-  };
+      }),
+    201,
+  );
+  list = respond((req) => this.backupService.list(req.query));
+  verifyBackup = respondData((req) => this.backupService.verifyBackup(Number(req.params.id)));
+  getSettings = respondData(() => this.backupService.getSettings());
+  updateSettings = respond((req) => {
+    const settings = this.backupService.updateSettings(req.body);
+    this.backupScheduler?.restart();
+    return { data: settings };
+  });
   restoreUploadedDatabase = async (req, res, next) => {
     const tempDir = path.join(env.appDataPath, 'temp');
     let tempFilePath;
@@ -95,36 +65,32 @@ export class BackupController {
         backupFilePath: tempFilePath,
         userId: req.user?.id,
       });
-      res.status(200).json({ status: 'success', data: result });
+      res.status(200).json({ data: result });
     } catch (error) {
       next(error);
     } finally {
       if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     }
   };
-  restoreLatestBackup = async (req, res, next) => {
-    try {
-      const directory = getBackupDirectory(this.backupService.db.name);
-      const candidates = fs.existsSync(directory)
-        ? fs
-            .readdirSync(directory)
-            .filter((name) => /\.(db|sqlite)$/i.test(name))
-            .map((name) => ({
-              file: path.join(directory, name),
-              stat: fs.lstatSync(path.join(directory, name)),
-            }))
-            .filter(({ stat }) => stat.isFile())
-            .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
-        : [];
-      if (!candidates.length)
-        throw new AppError('No backups found for the active database.', 404, 'BACKUP_NOT_FOUND');
-      const result = await this.restoreService.restoreDatabase({
-        backupFilePath: candidates[0].file,
-        userId: req.user?.id,
-      });
-      res.status(200).json({ status: 'success', data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
+  restoreLatestBackup = respond(async (req) => {
+    const directory = getBackupDirectory(this.backupService.db.name);
+    const candidates = fs.existsSync(directory)
+      ? fs
+          .readdirSync(directory)
+          .filter((name) => /\.(db|sqlite)$/i.test(name))
+          .map((name) => ({
+            file: path.join(directory, name),
+            stat: fs.lstatSync(path.join(directory, name)),
+          }))
+          .filter(({ stat }) => stat.isFile())
+          .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+      : [];
+    if (!candidates.length)
+      throw new AppError('No backups found for the active database.', 404, 'BACKUP_NOT_FOUND');
+    const result = await this.restoreService.restoreDatabase({
+      backupFilePath: candidates[0].file,
+      userId: req.user?.id,
+    });
+    return { data: result };
+  });
 }

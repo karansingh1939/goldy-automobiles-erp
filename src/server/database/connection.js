@@ -10,21 +10,37 @@ import { recoverOrphanBackupLock } from './backup-lock.js';
 
 let activeDatabase = null;
 
+/** The data folder and its sibling backups and logs folders. */
 function ensureRequiredDirectories(dbPath) {
   const dbDir = path.dirname(dbPath);
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
+  for (const dir of [dbDir, path.join(dbDir, '..', 'backups'), path.join(dbDir, '..', 'logs')])
+    fs.mkdirSync(dir, { recursive: true });
+}
 
-  const baseDir = path.resolve(dbDir, '..');
-  const backupsDir = path.join(baseDir, 'backups');
-  const logsDir = path.join(baseDir, 'logs');
-
-  if (!fs.existsSync(backupsDir)) {
-    fs.mkdirSync(backupsDir, { recursive: true });
-  }
-  if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
+/** Opens the file with the app's settings and refuses it if the quick integrity check fails. */
+function openChecked(resolvedPath) {
+  const db = new Database(resolvedPath);
+  try {
+    // Wait for a busy file before anything else, including the WAL switch.
+    db.pragma('busy_timeout = 10000');
+    db.pragma('foreign_keys = ON');
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    DbSafetyService.verifyConfiguration(db);
+    const health = IntegrityCheckService.check(db, true);
+    if (health.status === HealthState.FAILED) {
+      const error = new AppError(
+        `Database integrity check failed: ${health.errors.join('; ')}`,
+        500,
+        'DATABASE_CORRUPTION',
+      );
+      error.diagnostics = health;
+      throw error;
+    }
+    return db;
+  } catch (error) {
+    if (db.open) db.close();
+    throw error;
   }
 }
 
@@ -40,31 +56,9 @@ export function createDatabase(filePath = env.dbFile, { allowRestoreLock = false
   ensureRequiredDirectories(resolvedPath);
   recoverOrphanBackupLock(resolvedPath);
 
-  const db = new Database(resolvedPath);
   try {
-    // Wait for a busy file before anything else, including the WAL switch.
-    db.pragma('busy_timeout = 10000');
-    db.pragma('foreign_keys = ON');
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-
-    // 1. Verify connection safety settings
-    DbSafetyService.verifyConfiguration(db);
-
-    // 2. Run Database Integrity Scan (using quick_check for fast startup)
-    const health = IntegrityCheckService.check(db, true);
-    if (health.status === HealthState.FAILED) {
-      const errorMsg = `Database integrity check failed: ${health.errors.join('; ')}`;
-      const error = new AppError(errorMsg, 500, 'DATABASE_CORRUPTION');
-      error.diagnostics = health;
-
-      throw error;
-    }
-
-    return db;
+    return openChecked(resolvedPath);
   } catch (error) {
-    db.close();
-
     const isCorruption =
       error.message.includes('file is not a database') ||
       error.message.includes('database disk image is malformed') ||
@@ -95,28 +89,10 @@ export function createDatabase(filePath = env.dbFile, { allowRestoreLock = false
       }
 
       // 2. If recovery succeeded, re-attempt connecting to recovered database
-      if (recoveryResult && recoveryResult.status === 'SUCCESS') {
-        let recoveredDb;
+      if (recoveryResult?.status === 'SUCCESS') {
         try {
-          recoveredDb = new Database(resolvedPath);
-          recoveredDb.pragma('foreign_keys = ON');
-          recoveredDb.pragma('journal_mode = WAL');
-          recoveredDb.pragma('synchronous = NORMAL');
-          recoveredDb.pragma('busy_timeout = 10000');
-
-          DbSafetyService.verifyConfiguration(recoveredDb);
-
-          const healthCheck = IntegrityCheckService.check(recoveredDb, true);
-          if (healthCheck.status === HealthState.FAILED) {
-            recoveredDb.close();
-            throw new Error(
-              `Recovered database failed integrity scan: ${healthCheck.errors.join('; ')}`,
-            );
-          }
-
-          return recoveredDb;
+          return openChecked(resolvedPath);
         } catch (retryError) {
-          if (recoveredDb?.open) recoveredDb.close();
           const appErr = new AppError(
             `Database connection failed after recovery: ${retryError.message}`,
             500,
@@ -179,13 +155,10 @@ function readAppConfig() {
   return { demoMode: false };
 }
 
-export function getDatabase() {
-  if (!activeDatabase) {
-    const config = readAppConfig();
-    const filePath = config.demoMode ? demoDbFile : env.dbFile;
-    activeDatabase = createDatabase(filePath);
-  }
+const configuredDatabasePath = () => (readAppConfig().demoMode ? demoDbFile : env.dbFile);
 
+export function getDatabase() {
+  activeDatabase ||= createDatabase(configuredDatabasePath());
   return activeDatabase;
 }
 
@@ -198,33 +171,17 @@ export function closeDatabase() {
 
 export function reopenDatabase(filePath = null, { allowRestoreLock = false } = {}) {
   closeDatabase();
-  let targetPath = filePath;
-  if (!targetPath) {
-    const config = readAppConfig();
-    targetPath = config.demoMode ? demoDbFile : env.dbFile;
-  }
-  activeDatabase = createDatabase(targetPath, { allowRestoreLock });
+  activeDatabase = createDatabase(filePath || configuredDatabasePath(), { allowRestoreLock });
   return activeDatabase;
 }
 
+/** Removes the -wal and -shm side files of a closed database. */
 export function cleanupWalFiles(dbPath) {
-  const resolvedPath = path.resolve(dbPath);
-  const walPath = `${resolvedPath}-wal`;
-  const shmPath = `${resolvedPath}-shm`;
-
-  if (fs.existsSync(walPath)) {
+  for (const suffix of ['-wal', '-shm']) {
     try {
-      fs.unlinkSync(walPath);
+      fs.rmSync(`${path.resolve(dbPath)}${suffix}`, { force: true });
     } catch (err) {
-      console.warn(`Failed to clean up WAL file: ${err.message}`);
-    }
-  }
-
-  if (fs.existsSync(shmPath)) {
-    try {
-      fs.unlinkSync(shmPath);
-    } catch (err) {
-      console.warn(`Failed to clean up SHM file: ${err.message}`);
+      console.warn(`Failed to clean up ${suffix} file: ${err.message}`);
     }
   }
 }
