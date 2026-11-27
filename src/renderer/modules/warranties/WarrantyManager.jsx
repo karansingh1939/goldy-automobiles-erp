@@ -79,6 +79,21 @@ export default function WarrantyManager() {
     },
   });
 
+  // Reject a claim the supplier will not honour
+  const rejectClaimMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/api/v1/warranties/claims/${selectedClaim.id}/reject`, {
+        notes: 'Claim rejected',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warranty-claims'] });
+      addNotification('Warranty claim rejected.', 'success');
+      setShowSettleModal(false);
+      setSelectedClaim(null);
+    },
+    onError: (err) => addNotification(err.message || 'Could not reject the claim.', 'error'),
+  });
+
   const handleFileClaim = (e) => {
     e.preventDefault();
     fileClaimMutation.mutate({
@@ -430,6 +445,14 @@ export default function WarrantyManager() {
                   className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rejectClaimMutation.isPending}
+                  onClick={() => rejectClaimMutation.mutate()}
+                  className="px-4 py-2 border border-red-300 text-red-700 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50"
+                >
+                  Reject claim
                 </button>
                 <button
                   type="submit"

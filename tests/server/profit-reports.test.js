@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createTestContext } from './helpers.js';
+import { ProfitService } from '../../src/server/modules/profit/profit.service.js';
 
 async function login(context) {
   const result = await context.request('/api/v1/auth/login', {
@@ -253,22 +254,15 @@ async function createProfitFixture(context, token) {
   };
 }
 
+// The profit summary and best-customers figures feed the Home screen.
+const june = { period: 'custom', dateFrom: '2026-06-01', dateTo: '2026-06-30' };
+
 test('profit summary integrates expenses, calculates net profit, and excludes cancelled invoices', async () => {
   const context = await createTestContext();
-
   try {
     const token = await login(context);
     await createProfitFixture(context, token);
-
-    const summary = await context.request(
-      '/api/v1/profit/summary?period=custom&dateFrom=2026-06-01&dateTo=2026-06-30',
-      {
-        headers: authHeaders(token),
-      },
-    );
-
-    assert.equal(summary.response.status, 200, JSON.stringify(summary.body));
-    assert.deepEqual(summary.body.data, {
+    assert.deepEqual(new ProfitService(context.db).summary(june).data, {
       totalRevenue: 800,
       totalCost: 200,
       grossProfit: 600,
@@ -280,119 +274,33 @@ test('profit summary integrates expenses, calculates net profit, and excludes ca
   }
 });
 
-test('monthly profit report combines invoice profit and expenses by month', async () => {
+test('best customers group active invoice profit by customer', async () => {
   const context = await createTestContext();
-
-  try {
-    const token = await login(context);
-    await createProfitFixture(context, token);
-
-    const monthly = await context.request(
-      '/api/v1/profit/by-month?period=custom&dateFrom=2026-05-01&dateTo=2026-06-30',
-      {
-        headers: authHeaders(token),
-      },
-    );
-
-    assert.equal(monthly.response.status, 200, JSON.stringify(monthly.body));
-    assert.deepEqual(monthly.body.data, [
-      {
-        month: '2026-05',
-        revenue: 200,
-        cost: 80,
-        grossProfit: 120,
-        expenses: 30,
-        netProfit: 90,
-      },
-      {
-        month: '2026-06',
-        revenue: 800,
-        cost: 200,
-        grossProfit: 600,
-        expenses: 150,
-        netProfit: 450,
-      },
-    ]);
-  } finally {
-    await context.close();
-  }
-});
-
-test('profit breakdown APIs group active invoice profit by customer, vehicle, item, and mechanic', async () => {
-  const context = await createTestContext();
-
   try {
     const token = await login(context);
     const fixture = await createProfitFixture(context, token);
-    const query = '?period=custom&dateFrom=2026-06-01&dateTo=2026-06-30';
-
-    const byCustomer = await context.request(`/api/v1/profit/by-customer${query}`, {
-      headers: authHeaders(token),
-    });
-    assert.equal(byCustomer.response.status, 200, JSON.stringify(byCustomer.body));
-    assert.equal(byCustomer.body.data.length, 1);
-    assert.equal(byCustomer.body.data[0].customerId, fixture.june.customer.id);
-    assert.equal(byCustomer.body.data[0].revenue, 800);
-    assert.equal(byCustomer.body.data[0].profit, 600);
-
-    const byVehicle = await context.request(`/api/v1/profit/by-vehicle${query}`, {
-      headers: authHeaders(token),
-    });
-    assert.equal(byVehicle.response.status, 200, JSON.stringify(byVehicle.body));
-    assert.equal(byVehicle.body.data.length, 1);
-    assert.equal(byVehicle.body.data[0].vehicleId, fixture.june.vehicle.id);
-    assert.equal(byVehicle.body.data[0].cost, 200);
-
-    const byItem = await context.request(`/api/v1/profit/by-inventory-item${query}`, {
-      headers: authHeaders(token),
-    });
-    assert.equal(byItem.response.status, 200, JSON.stringify(byItem.body));
-    assert.deepEqual(
-      byItem.body.data.map((row) => row.itemId),
-      [fixture.juneItem.id],
-    );
-    assert.equal(byItem.body.data[0].revenue, 300);
-    assert.equal(byItem.body.data[0].profit, 100);
-
-    const byMechanic = await context.request(`/api/v1/profit/by-mechanic${query}`, {
-      headers: authHeaders(token),
-    });
-    assert.equal(byMechanic.response.status, 200, JSON.stringify(byMechanic.body));
-    assert.equal(byMechanic.body.data.length, 1);
-    assert.equal(byMechanic.body.data[0].mechanic, 'System Administrator');
-    assert.equal(byMechanic.body.data[0].profit, 600);
+    const byCustomer = new ProfitService(context.db).byCustomer(june).data;
+    assert.equal(byCustomer.length, 1);
+    assert.equal(byCustomer[0].customerId, fixture.june.customer.id);
+    assert.equal(byCustomer[0].revenue, 800);
+    assert.equal(byCustomer[0].profit, 600);
   } finally {
     await context.close();
   }
 });
 
-test('profit reports enforce authentication and date filter validation', async () => {
+test('profit dates are validated', async () => {
   const context = await createTestContext();
-
   try {
-    const unauthenticated = await context.request('/api/v1/profit/summary');
-    assert.equal(unauthenticated.response.status, 401);
-
-    const token = await login(context);
-    const invalidRange = await context.request(
-      '/api/v1/profit/summary?period=custom&dateFrom=2026-06-30&dateTo=2026-06-01',
-      {
-        headers: authHeaders(token),
-      },
+    const profit = new ProfitService(context.db);
+    assert.throws(
+      () => profit.summary({ period: 'custom', dateFrom: '2026-06-30', dateTo: '2026-06-01' }),
+      (error) => error.code === 'VALIDATION_ERROR',
     );
-
-    assert.equal(invalidRange.response.status, 400);
-    assert.equal(invalidRange.body.error.code, 'VALIDATION_ERROR');
-
-    const missingCustomDate = await context.request(
-      '/api/v1/profit/summary?period=custom&dateFrom=2026-06-01',
-      {
-        headers: authHeaders(token),
-      },
+    assert.throws(
+      () => profit.summary({ period: 'custom', dateFrom: '2026-06-01' }),
+      (error) => error.code === 'VALIDATION_ERROR',
     );
-
-    assert.equal(missingCustomDate.response.status, 400);
-    assert.equal(missingCustomDate.body.error.code, 'VALIDATION_ERROR');
   } finally {
     await context.close();
   }

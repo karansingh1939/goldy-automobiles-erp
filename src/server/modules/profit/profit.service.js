@@ -106,44 +106,6 @@ export class ProfitService {
     };
   }
 
-  byMonth(query = {}) {
-    const filters = parseFilters(query);
-    const profitRows = this.repository.profitByMonth(filters);
-    const expenseRows = this.repository.expensesByMonth(filters);
-    const months = new Map();
-
-    for (const row of profitRows) {
-      months.set(row.month, {
-        month: row.month,
-        revenue: money(row.revenue),
-        cost: money(row.cost),
-        grossProfit: money(row.gross_profit),
-        expenses: 0,
-      });
-    }
-
-    for (const row of expenseRows) {
-      const existing = months.get(row.month) || {
-        month: row.month,
-        revenue: 0,
-        cost: 0,
-        grossProfit: 0,
-        expenses: 0,
-      };
-      existing.expenses = money(row.expenses);
-      months.set(row.month, existing);
-    }
-
-    const data = [...months.values()]
-      .sort((left, right) => left.month.localeCompare(right.month))
-      .map((row) => ({
-        ...row,
-        netProfit: money(row.grossProfit - row.expenses),
-      }));
-
-    return { filters, data };
-  }
-
   byCustomer(query = {}) {
     const filters = parseFilters(query);
     return {
@@ -151,50 +113,6 @@ export class ProfitService {
       data: this.repository.profitByCustomer(filters).map((row) => ({
         customerId: row.customer_id,
         customer: row.customer,
-        revenue: money(row.revenue),
-        cost: money(row.cost),
-        profit: money(row.profit),
-      })),
-    };
-  }
-
-  byVehicle(query = {}) {
-    const filters = parseFilters(query);
-    return {
-      filters,
-      data: this.repository.profitByVehicle(filters).map((row) => ({
-        vehicleId: row.vehicle_id,
-        vehicle: row.vehicle,
-        customer: row.customer,
-        revenue: money(row.revenue),
-        cost: money(row.cost),
-        profit: money(row.profit),
-      })),
-    };
-  }
-
-  byInventoryItem(query = {}) {
-    const filters = parseFilters(query);
-    return {
-      filters,
-      data: this.repository.profitByInventoryItem(filters).map((row) => ({
-        itemId: row.item_id,
-        sku: row.sku,
-        item: row.item,
-        revenue: money(row.revenue),
-        cost: money(row.cost),
-        profit: money(row.profit),
-      })),
-    };
-  }
-
-  byMechanic(query = {}) {
-    const filters = parseFilters(query);
-    return {
-      filters,
-      data: this.repository.profitByMechanic(filters).map((row) => ({
-        mechanicId: row.mechanic_id,
-        mechanic: row.mechanic,
         revenue: money(row.revenue),
         cost: money(row.cost),
         profit: money(row.profit),

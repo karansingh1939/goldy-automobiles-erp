@@ -93,21 +93,6 @@ export class BackupRepository {
       .all(limit, offset);
   }
 
-  getLatestSuccessfulBackup() {
-    return this.db
-      .prepare(
-        `
-      SELECT backup_logs.*, users.name AS created_by_name
-      FROM backup_logs
-      LEFT JOIN users ON users.id = backup_logs.created_by
-      WHERE backup_logs.status = 'SUCCESS'
-      ORDER BY backup_logs.id DESC
-      LIMIT 1
-    `,
-      )
-      .get();
-  }
-
   getSchedulerSettings() {
     const rows = this.db
       .prepare(

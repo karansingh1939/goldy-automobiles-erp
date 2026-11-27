@@ -11,14 +11,6 @@ export class PurchasingController {
     }
   };
 
-  getOrder = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.purchasingService.getOrder(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
-
   createOrder = (req, res, next) => {
     try {
       res
@@ -50,24 +42,6 @@ export class PurchasingController {
       res
         .status(201)
         .json({ data: this.purchasingService.createReceipt(req.body || {}, req.user?.id) });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  getReturn = (req, res, next) => {
-    try {
-      res.status(200).json({ data: this.purchasingService.getReturn(Number(req.params.id)) });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  createReturn = (req, res, next) => {
-    try {
-      res
-        .status(201)
-        .json({ data: this.purchasingService.createReturn(req.body || {}, req.user?.id) });
     } catch (error) {
       next(error);
     }

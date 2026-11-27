@@ -92,10 +92,6 @@ test('service history API - authentication and authorization constraints', async
     assert.equal(unauthVehicle.response.status, 401);
     assert.equal(unauthVehicle.body.error.code, 'AUTH_TOKEN_REQUIRED');
 
-    const unauthCustomer = await context.request('/api/v1/customers/1/service-history');
-    assert.equal(unauthCustomer.response.status, 401);
-    assert.equal(unauthCustomer.body.error.code, 'AUTH_TOKEN_REQUIRED');
-
     // 2. Users lacking specific read permissions should be denied with 403
     context.db
       .prepare(
@@ -141,12 +137,6 @@ test('service history API - authentication and authorization constraints', async
     });
     assert.equal(forbiddenVehicle.response.status, 403);
     assert.equal(forbiddenVehicle.body.error.code, 'PERMISSION_DENIED');
-
-    const forbiddenCustomer = await context.request('/api/v1/customers/1/service-history', {
-      headers: authHeaders(nopermToken),
-    });
-    assert.equal(forbiddenCustomer.response.status, 403);
-    assert.equal(forbiddenCustomer.body.error.code, 'PERMISSION_DENIED');
   } finally {
     await context.close();
   }
@@ -165,13 +155,6 @@ test('service history API - entity existence checks', async () => {
     });
     assert.equal(unknownVehicle.response.status, 404);
     assert.equal(unknownVehicle.body.error.code, 'ITEM_NOT_FOUND');
-
-    // Requesting unknown customer returns 404
-    const unknownCustomer = await context.request('/api/v1/customers/999/service-history', {
-      headers,
-    });
-    assert.equal(unknownCustomer.response.status, 404);
-    assert.equal(unknownCustomer.body.error.code, 'ITEM_NOT_FOUND');
   } finally {
     await context.close();
   }
@@ -402,32 +385,6 @@ test('service history API - empty history and populated service records', async 
     assert.deepEqual(history[2].parts, [
       { description: 'Brake Pad Set', quantity: 1, unitPrice: 5000, lineTotal: 5000 },
     ]);
-
-    // 3. Verify Customer Service History boundary constraints (Customer A)
-    const resultCustomer = await context.request('/api/v1/customers/1/service-history', {
-      headers,
-    });
-    assert.equal(resultCustomer.response.status, 200);
-
-    // Customer A owns vehicle 1 (with 3 history items) and vehicle 3 (empty history)
-    assert.equal(resultCustomer.body.customer.name, 'Customer A');
-    assert.equal(resultCustomer.body.vehicles.length, 2);
-
-    // Verify first nested vehicle is Vehicle 1
-    const v1Nested = resultCustomer.body.vehicles.find((vh) => vh.vehicle.id === 1);
-    assert.ok(v1Nested);
-    assert.equal(v1Nested.summary.totalVisits, 3);
-    assert.equal(v1Nested.summary.totalRevenue, 1500);
-
-    // Verify second nested vehicle is Vehicle 3
-    const v3Nested = resultCustomer.body.vehicles.find((vh) => vh.vehicle.id === 3);
-    assert.ok(v3Nested);
-    assert.equal(v3Nested.summary.totalVisits, 0);
-    assert.equal(v3Nested.summary.totalRevenue, 0);
-
-    // Alto (Vehicle 2) belongs to Customer B, so it should not exist in Customer A's list
-    const v2Nested = resultCustomer.body.vehicles.find((vh) => vh.vehicle.id === 2);
-    assert.equal(v2Nested, undefined);
   } finally {
     await context.close();
   }

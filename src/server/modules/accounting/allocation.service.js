@@ -43,10 +43,6 @@ export class AllocationService {
   // BACKWARD COMPATIBLE CUSTOMER METHODS
   // ==========================================
 
-  getOutstandingReceivables(companyId, customerId) {
-    return this.getOutstanding('CUSTOMER', companyId, customerId);
-  }
-
   allocateReceiptFIFO(receiptId, companyId, customerId, amount) {
     return this.allocateFIFO('CUSTOMER', receiptId, companyId, customerId, amount);
   }

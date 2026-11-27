@@ -54,64 +54,19 @@ export class InventoryService {
     this.postingEngine = new AccountingPostingEngine(db);
   }
 
-  getPermittedWarehouseIds(userId) {
-    if (!userId) return [];
-    const user = this.db.prepare('SELECT role_id FROM users WHERE id = ?').get(userId);
-    if (user) {
-      const role = this.db.prepare('SELECT name FROM roles WHERE id = ?').get(user.role_id);
-      if (role && role.name === 'Admin') {
-        return this.db
-          .prepare('SELECT id FROM warehouses WHERE is_active = 1')
-          .all()
-          .map((r) => r.id);
-      }
-    }
-    const rows = this.db
-      .prepare('SELECT warehouse_id FROM user_warehouses WHERE user_id = ?')
-      .all(userId);
-    if (rows.length > 0) {
-      return rows.map((r) => r.warehouse_id);
-    }
-    return this.db
-      .prepare('SELECT id FROM warehouses WHERE is_active = 1')
-      .all()
-      .map((r) => r.id);
-  }
-
+  /** Stock can only move in or out of a godown that is switched on. */
   assertWarehousePermission(userId, warehouseId) {
-    if (!userId) return; // skip checks if no userId is present (e.g. system seed scripts)
-    const permittedIds = this.getPermittedWarehouseIds(userId);
-    if (!permittedIds.includes(Number(warehouseId))) {
+    if (!userId) return; // seed scripts run without a user
+    const active = this.db
+      .prepare('SELECT 1 FROM warehouses WHERE id = ? AND is_active = 1')
+      .get(warehouseId);
+    if (!active) {
       throw new AppError(
-        'You do not have permission to access this warehouse.',
+        'This godown is switched off. Switch it on under Godowns & Masters first.',
         403,
         'PERMISSION_DENIED',
       );
     }
-  }
-
-  getWarehousePermissions(warehouseId) {
-    const rows = this.db
-      .prepare('SELECT user_id FROM user_warehouses WHERE warehouse_id = ?')
-      .all(warehouseId);
-    return { userIds: rows.map((r) => r.user_id) };
-  }
-
-  saveWarehousePermissions(warehouseId, { userIds }) {
-    if (!Array.isArray(userIds)) {
-      throw new AppError('User IDs must be an array.', 400, 'VALIDATION_ERROR');
-    }
-
-    return this.repository.transaction(() => {
-      this.db.prepare('DELETE FROM user_warehouses WHERE warehouse_id = ?').run(warehouseId);
-      const insert = this.db.prepare(
-        'INSERT INTO user_warehouses (user_id, warehouse_id) VALUES (?, ?)',
-      );
-      for (const uid of userIds) {
-        insert.run(uid, warehouseId);
-      }
-      return { success: true };
-    });
   }
 
   listItems(query) {
@@ -843,114 +798,6 @@ export class InventoryService {
     });
   }
 
-  cancelTransfer(transferId, userId) {
-    return this.repository.transaction(() => {
-      const transfer = this.db
-        .prepare('SELECT * FROM stock_transfers WHERE id = ?')
-        .get(transferId);
-      if (!transfer) {
-        throw new AppError('Stock transfer record not found.', 404, 'TRANSFER_NOT_FOUND');
-      }
-      if (transfer.status === 'CANCELLED') {
-        throw new AppError('Transfer is already cancelled.', 400, 'VALIDATION_ERROR');
-      }
-
-      this.assertWarehousePermission(userId, transfer.from_warehouse_id);
-      this.assertWarehousePermission(userId, transfer.to_warehouse_id);
-
-      const sourceBatch = this.repository.findBatchById(transfer.batch_id);
-
-      if (transfer.status === 'PENDING') {
-        // Return shipped qty to source
-        this.stockIn({
-          itemId: transfer.item_id,
-          warehouseId: transfer.from_warehouse_id,
-          supplierId: sourceBatch.supplier_id,
-          batchNumber: sourceBatch.batch_number,
-          manufactureDate: sourceBatch.manufacture_date,
-          expiryDate: sourceBatch.expiry_date,
-          quantity: transfer.quantity,
-          unitCost: transfer.unit_cost,
-          transactionType: 'Transfer',
-          referenceType: 'stock_transfers',
-          referenceId: transferId,
-          notes: 'Transfer Cancelled: Returned to Source',
-          userId,
-          keepAverageCost: true,
-        });
-      } else if (transfer.status === 'COMPLETED') {
-        // COMPLETED transfer reversal
-        // 1. Stock out the received quantity from destination
-        if (transfer.received_quantity > 0) {
-          // Resolve batch at destination matching the transfer batch number
-          const destBatch = this.db
-            .prepare(
-              `
-            SELECT id FROM inventory_batches 
-            WHERE item_id = ? AND warehouse_id = ? AND batch_number = ?
-          `,
-            )
-            .get(transfer.item_id, transfer.to_warehouse_id, sourceBatch.batch_number);
-
-          if (!destBatch) {
-            throw new AppError(
-              'Destination batch not found during reversal.',
-              400,
-              'VALIDATION_ERROR',
-            );
-          }
-
-          this.stockOut({
-            itemId: transfer.item_id,
-            warehouseId: transfer.to_warehouse_id,
-            batchId: destBatch.id,
-            quantity: transfer.received_quantity,
-            transactionType: 'Transfer',
-            referenceType: 'stock_transfers',
-            referenceId: transferId,
-            notes: 'Transfer Reversed: Shipped back',
-            userId,
-          });
-        }
-
-        // 2. Return total shipped quantity back to source
-        this.stockIn({
-          itemId: transfer.item_id,
-          warehouseId: transfer.from_warehouse_id,
-          supplierId: sourceBatch.supplier_id,
-          batchNumber: sourceBatch.batch_number,
-          manufactureDate: sourceBatch.manufacture_date,
-          expiryDate: sourceBatch.expiry_date,
-          quantity: transfer.quantity,
-          unitCost: transfer.unit_cost,
-          transactionType: 'Transfer',
-          referenceType: 'stock_transfers',
-          referenceId: transferId,
-          notes: 'Transfer Reversed: Returned to Source',
-          userId,
-          keepAverageCost: true,
-        });
-
-        // 3. Reverse any variance adjustments and their vouchers
-        const adjustments = this.db
-          .prepare('SELECT id, voucher_id FROM stock_adjustments WHERE reason LIKE ?')
-          .all(`%Transfer ${transfer.transfer_number}%`);
-        for (const adj of adjustments) {
-          if (adj.voucher_id) {
-            // Cancel the voucher in PostingEngine
-            this.postingEngine.deleteVoucher(1, adj.voucher_id);
-          }
-          this.db.prepare('DELETE FROM stock_adjustments WHERE id = ?').run(adj.id);
-        }
-      }
-
-      this.db
-        .prepare("UPDATE stock_transfers SET status = 'CANCELLED' WHERE id = ?")
-        .run(transferId);
-      return { id: transferId, status: 'CANCELLED' };
-    });
-  }
-
   /** Stock on hand for an item, optionally in one godown or one batch. */
   getAvailableQuantity(itemId, warehouseId = null, batchId = null) {
     let physicalQty = 0;
@@ -1318,113 +1165,12 @@ export class InventoryService {
     };
   }
 
-  reconcileInventory(companyId) {
-    // 1. Get ledger inventory balance
-    const ledgerRow = this.db
-      .prepare(
-        `
-      SELECT SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE -amount END) AS balance
-      FROM journal_entries
-      JOIN vouchers ON vouchers.id = journal_entries.voucher_id
-      WHERE vouchers.company_id = ? AND vouchers.status <> 'CANCELLED'
-        AND journal_entries.ledger_id = (
-          SELECT id FROM ledgers WHERE company_id = ? AND system_key = 'inventory_stock'
-        )
-    `,
-      )
-      .get(companyId, companyId);
-    const ledgerBalance = money(ledgerRow?.balance || 0);
-
-    // 2. Get current stock valuation (AVCO)
-    const valuationResult = this.stockValuation({ method: 'AVCO' });
-    const totalValuation = valuationResult.totals.value;
-
-    // 3. Get item quantities and batch quantities mismatches
-    const items = this.db
-      .prepare(
-        'SELECT id, sku, item_name, current_quantity, average_cost FROM inventory_items WHERE is_active = 1',
-      )
-      .all();
-    const itemMismatches = [];
-    let totalItemsQty = 0;
-    let totalBatchesQty = 0;
-
-    for (const item of items) {
-      const batchRow = this.db
-        .prepare('SELECT SUM(quantity) AS total FROM inventory_batches WHERE item_id = ?')
-        .get(item.id);
-      const batchQty = number(batchRow?.total);
-      const itemQty = number(item.current_quantity);
-
-      totalItemsQty += itemQty;
-      totalBatchesQty += batchQty;
-
-      if (Math.abs(itemQty - batchQty) > 0.0001) {
-        itemMismatches.push({
-          itemId: item.id,
-          sku: item.sku,
-          itemName: item.item_name,
-          itemQuantity: itemQty,
-          batchQuantity: batchQty,
-          difference: money(itemQty - batchQty),
-        });
-      }
-    }
-
-    // 4. Warehouse quantities
-    const warehouseQuantities = this.db
-      .prepare(
-        `
-      SELECT w.id, w.name, w.code, COALESCE(SUM(b.quantity), 0) AS total_quantity
-      FROM warehouses w
-      LEFT JOIN inventory_batches b ON b.warehouse_id = w.id
-      WHERE w.is_active = 1
-      GROUP BY w.id
-    `,
-      )
-      .all();
-
-    // 5. Reservation balances
-    const reservations = this.db
-      .prepare(
-        `
-      SELECT item_id, SUM(quantity) AS total_reserved
-      FROM inventory_reservations
-      WHERE status = 'ACTIVE'
-      GROUP BY item_id
-    `,
-      )
-      .all();
-    const reservationTotal = reservations.reduce((sum, r) => sum + number(r.total_reserved), 0);
-
-    return {
-      ledgerBalance,
-      totalValuation,
-      valuationVsLedgerDifference: money(totalValuation - ledgerBalance),
-      totalItemsQty: money(totalItemsQty),
-      totalBatchesQty: money(totalBatchesQty),
-      quantityMismatchCount: itemMismatches.length,
-      quantityMismatches: itemMismatches,
-      warehouseQuantities,
-      reservationTotal,
-    };
-  }
-
   movementReport(query = {}) {
     return { data: this.repository.inventoryMovements({ itemId: query.itemId }) };
   }
 
   lowStockReport() {
     return { data: this.repository.lowStock() };
-  }
-
-  expiringStockReport(query = {}) {
-    return {
-      data: this.repository.expiringStock({
-        asOf: query.asOf || localDate(),
-        days: Number.parseInt(query.days || '30', 10) || 30,
-      }),
-    };
   }
 
   getSeedStatus() {

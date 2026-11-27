@@ -222,35 +222,6 @@ export class TechnicianRepository {
   }
 
   /**
-   * Retrieves full assignment history logs for a job card
-   * @param {number} jobCardId
-   * @returns {Array} List of historical assignments
-   */
-  getAssignmentHistory(jobCardId) {
-    return this.db
-      .prepare(
-        `
-      SELECT
-        a.id,
-        a.job_card_id AS jobCardId,
-        a.technician_id AS technicianId,
-        t.technician_code AS technicianCode,
-        t.full_name AS technicianName,
-        a.assigned_at AS assignedAt,
-        a.assigned_by AS assignedById,
-        u.name AS assignedByName,
-        a.notes
-      FROM job_card_assignments a
-      JOIN technicians t ON t.id = a.technician_id
-      LEFT JOIN users u ON u.id = a.assigned_by
-      WHERE a.job_card_id = ?
-      ORDER BY a.assigned_at DESC, a.id DESC
-    `,
-      )
-      .all(jobCardId);
-  }
-
-  /**
    * Get KPI metrics for a specific technician
    * @param {number} technicianId
    * @returns {object} { totalAssignedJobs, completedJobs, activeJobs }

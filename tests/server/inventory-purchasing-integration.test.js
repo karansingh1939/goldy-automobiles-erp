@@ -227,34 +227,34 @@ test('purchasing APIs create orders, post receipts to stock, and record returns'
     assert.equal(receivedItem.current_quantity, 10);
     assert.equal(receivedItem.average_cost, 200);
 
-    const refreshedOrder = await context.request(`/api/v1/purchases/orders/${order.body.data.id}`, {
-      headers: authHeaders(token),
-    });
+    const refreshedOrder = context.db
+      .prepare('SELECT status FROM purchase_orders WHERE id = ?')
+      .get(order.body.data.id);
+    assert.equal(refreshedOrder.status, 'RECEIVED');
 
-    assert.equal(refreshedOrder.response.status, 200);
-    assert.equal(refreshedOrder.body.data.status, 'RECEIVED');
-
-    const purchaseReturn = await context.request('/api/v1/purchases/returns', {
+    // Send 2 back to the supplier the way the Returns screen does: draft, then approve.
+    const purchaseReturn = await context.request('/api/v1/returns/supplier', {
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify({
-        supplier_id: supplier.id,
-        return_date: '2026-06-04',
+        supplierId: supplier.id,
+        returnDate: '2026-06-04',
         items: [
           {
-            item_id: item.id,
-            warehouse_id: mainWarehouse.id,
-            batch_id: receipt.body.data.items[0].batch_id,
+            itemId: item.id,
+            batchId: receipt.body.data.items[0].batch_id,
             quantity: 2,
-            unit_cost: 200,
-            gst_rate: 18,
           },
         ],
       }),
     });
-
     assert.equal(purchaseReturn.response.status, 201, JSON.stringify(purchaseReturn.body));
-    assert.equal(purchaseReturn.body.data.grand_total, 472);
+    assert.equal(purchaseReturn.body.data.total_refund_amount, 472);
+    const approved = await context.request(
+      `/api/v1/returns/supplier/${purchaseReturn.body.data.id}/approve`,
+      { method: 'POST', headers: authHeaders(token) },
+    );
+    assert.equal(approved.response.status, 200, JSON.stringify(approved.body));
 
     const returnedItem = context.db
       .prepare('SELECT current_quantity FROM inventory_items WHERE id = ?')

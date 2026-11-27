@@ -427,27 +427,6 @@ export class InventoryRepository {
       .all();
   }
 
-  expiringStock({ asOf, days }) {
-    return this.db
-      .prepare(
-        `
-      SELECT
-        inventory_batches.*,
-        inventory_items.sku,
-        inventory_items.item_name,
-        warehouses.name AS warehouse_name
-      FROM inventory_batches
-      JOIN inventory_items ON inventory_items.id = inventory_batches.item_id
-      JOIN warehouses ON warehouses.id = inventory_batches.warehouse_id
-      WHERE inventory_batches.quantity > 0
-        AND inventory_batches.expiry_date IS NOT NULL
-        AND DATE(inventory_batches.expiry_date) <= DATE(?, '+' || ? || ' days')
-      ORDER BY inventory_batches.expiry_date
-    `,
-      )
-      .all(asOf, days);
-  }
-
   createFixedAsset(data) {
     const result = this.db
       .prepare(
@@ -536,44 +515,6 @@ export class InventoryRepository {
       .get(...params).count;
 
     return { data, total };
-  }
-
-  createStockVerification(data) {
-    const result = this.db
-      .prepare(
-        `
-      INSERT INTO stock_verifications (
-        verification_number,
-        verification_type,
-        audit_session_id,
-        warehouse_id,
-        item_id,
-        batch_id,
-        previous_quantity,
-        counted_quantity,
-        difference,
-        adjustment_id,
-        verified_by,
-        notes
-      )
-      VALUES (
-        @verification_number,
-        @verification_type,
-        @audit_session_id,
-        @warehouse_id,
-        @item_id,
-        @batch_id,
-        @previous_quantity,
-        @counted_quantity,
-        @difference,
-        @adjustment_id,
-        @verified_by,
-        @notes
-      )
-    `,
-      )
-      .run(data);
-    return result.lastInsertRowid;
   }
 
   listStockVerifications({ limit, offset, warehouseId, itemId, batchId }) {

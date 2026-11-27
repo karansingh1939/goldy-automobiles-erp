@@ -148,35 +148,32 @@ test('GST Engine & Tax Compliance Sprint 5 - End-to-End', async () => {
     assert.equal(interstateInvoiceRow.sgst_total, 0);
     assert.equal(interstateInvoiceRow.igst_total, 72);
 
-    // 4. Perform Interstate Purchase (Input tax credit check)
-    const interstatePurchaseRes = await context.request('/api/v1/accounting/purchases/bills', {
+    // 4. Interstate purchase through Buy Stock (input tax credit check)
+    const interstatePurchaseRes = await context.request('/api/v1/purchases/receipts', {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        supplierId: interstateSupplierId,
-        billNumber: 'PUR-DEL-001',
-        billDate: '2026-06-14',
+        supplier_id: interstateSupplierId,
+        receipt_number: 'PUR-DEL-001',
+        receipt_date: '2026-06-14',
         items: [
-          {
-            itemId,
-            description: 'Interstate Parts',
-            quantity: 5,
-            purchaseCost: 100,
-            gstRate: 18,
-            warehouseId: 1,
-          },
+          { item_id: itemId, warehouse_id: 1, quantity: 5, purchase_cost: 100, gst_rate: 18 },
         ],
       }),
     });
-    assert.equal(interstatePurchaseRes.response.status, 201);
-    const purchaseBill = interstatePurchaseRes.body.data;
-
-    const purchaseBillRow = db
-      .prepare('SELECT cgst_total, sgst_total, igst_total FROM purchase_bills WHERE id = ?')
-      .get(purchaseBill.id);
-    assert.equal(purchaseBillRow.cgst_total, 0);
-    assert.equal(purchaseBillRow.sgst_total, 0);
-    assert.equal(purchaseBillRow.igst_total, 90); // 18% of 500 = 90
+    assert.equal(
+      interstatePurchaseRes.response.status,
+      201,
+      JSON.stringify(interstatePurchaseRes.body),
+    );
+    const igstInput = db
+      .prepare(
+        `SELECT SUM(je.amount) AS amount FROM journal_entries je
+         JOIN ledgers l ON l.id = je.ledger_id JOIN vouchers v ON v.id = je.voucher_id
+         WHERE v.reference_table = 'purchase_receipts' AND l.system_key = 'igst_input'`,
+      )
+      .get().amount;
+    assert.equal(igstInput, 90); // 18% of 500, all IGST for a Delhi supplier
 
     // 5. Query GSTR-3B and assert eligible ITC and ratewise breakdown
     const gstr3bRes = await context.request(
@@ -202,63 +199,6 @@ test('GST Engine & Tax Compliance Sprint 5 - End-to-End', async () => {
     // Rate breakdown
     assert.equal(gstr3b.rateBreakdown[0].gstRate, 18);
     assert.equal(gstr3b.rateBreakdown[0].taxableValue, 800);
-
-    // 6. Test Period Locking
-    // Post lock
-    const lockRes = await context.request('/api/v1/gst/locks', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        taxPeriod: '2026-06',
-        isLocked: true,
-      }),
-    });
-    assert.equal(lockRes.response.status, 200);
-
-    // Verify locks listing
-    const locksRes = await context.request('/api/v1/gst/locks', {
-      method: 'GET',
-      headers,
-    });
-    assert.equal(locksRes.response.status, 200);
-    assert.equal(locksRes.body.data[0].tax_period, '2026-06');
-    assert.equal(locksRes.body.data[0].is_locked, 1);
-
-    // Posting direct invoice in locked tax period -> should fail
-    const blockedInvoiceRes = await context.request('/api/v1/accounting/direct-invoices', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        customerId: localCustomer,
-        invoiceDate: '2026-06-20',
-        items: [{ itemId, quantity: 1, unitPrice: 200, gstRate: 18, warehouseId: 1 }],
-      }),
-    });
-    assert.equal(blockedInvoiceRes.response.status, 400);
-    assert.equal(blockedInvoiceRes.body.error.code, 'GST_PERIOD_LOCKED');
-
-    // Unlock period
-    const unlockRes = await context.request('/api/v1/gst/locks', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        taxPeriod: '2026-06',
-        isLocked: false,
-      }),
-    });
-    assert.equal(unlockRes.response.status, 200);
-
-    // Try posting again -> should succeed now
-    const retryInvoiceRes = await context.request('/api/v1/accounting/direct-invoices', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        customerId: localCustomer,
-        invoiceDate: '2026-06-20',
-        items: [{ itemId, quantity: 1, unitPrice: 200, gstRate: 18, warehouseId: 1 }],
-      }),
-    });
-    assert.equal(retryInvoiceRes.response.status, 201);
   } finally {
     await context.close();
   }

@@ -40,19 +40,6 @@ export class AuthRepository {
     return result.lastInsertRowid;
   }
 
-  updateRecoveryCode(userId, recoveryCodeHash) {
-    this.db
-      .prepare(
-        `
-      UPDATE users
-      SET recovery_code_hash = ?,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `,
-      )
-      .run(recoveryCodeHash, userId);
-  }
-
   incrementFailedAttempts(userId) {
     this.db
       .prepare(

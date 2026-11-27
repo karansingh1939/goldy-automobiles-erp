@@ -147,6 +147,12 @@ export class CustomerReceiptService {
       );
 
       const receiptId = info.lastInsertRowid;
+      // Link the voucher back to its receipt (used when an entry is cancelled).
+      this.db
+        .prepare(
+          "UPDATE vouchers SET reference_table = 'customer_receipts', reference_id = ? WHERE id = ?",
+        )
+        .run(receiptId, voucherResult.voucherId);
 
       // 5. Pay the named bills, or match oldest bills first if requested
       if (Array.isArray(allocations) && allocations.length) {

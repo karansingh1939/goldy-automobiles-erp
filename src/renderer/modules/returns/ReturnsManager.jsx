@@ -111,6 +111,16 @@ export default function ReturnsManager() {
     },
   });
 
+  // Cancel a draft return that was entered by mistake
+  const cancelDraft = useMutation({
+    mutationFn: ({ kind, id }) => api.post(`/api/v1/returns/${kind}/${id}/cancel`),
+    onSuccess: (_result, { kind }) => {
+      queryClient.invalidateQueries({ queryKey: [`${kind}-returns`] });
+      addNotification('Draft return cancelled.', 'success');
+    },
+    onError: (err) => addNotification(err.message || 'Could not cancel the return.', 'error'),
+  });
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!invoiceId || !selectedItem || !Number.isFinite(Number(qty)) || Number(qty) <= 0) {
@@ -233,12 +243,20 @@ export default function ReturnsManager() {
                     </td>
                     <td className="px-4 py-4 text-center">
                       {r.status === 'DRAFT' && (
-                        <button
-                          onClick={() => approveMutation.mutate(r.id)}
-                          className="text-xs font-semibold text-green-600 hover:text-green-700"
-                        >
-                          Approve Return
-                        </button>
+                        <span className="flex justify-center gap-3">
+                          <button
+                            onClick={() => approveMutation.mutate(r.id)}
+                            className="text-xs font-semibold text-green-600 hover:text-green-700"
+                          >
+                            Approve Return
+                          </button>
+                          <button
+                            onClick={() => cancelDraft.mutate({ kind: 'customer', id: r.id })}
+                            className="text-xs font-semibold text-red-600 hover:text-red-700"
+                          >
+                            Cancel draft
+                          </button>
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -286,12 +304,20 @@ export default function ReturnsManager() {
                   </td>
                   <td className="px-4 py-4 text-center">
                     {r.status === 'DRAFT' && (
-                      <button
-                        onClick={() => approveSupMutation.mutate(r.id)}
-                        className="text-xs font-semibold text-green-600 hover:text-green-700"
-                      >
-                        Approve Return
-                      </button>
+                      <span className="flex justify-center gap-3">
+                        <button
+                          onClick={() => approveSupMutation.mutate(r.id)}
+                          className="text-xs font-semibold text-green-600 hover:text-green-700"
+                        >
+                          Approve Return
+                        </button>
+                        <button
+                          onClick={() => cancelDraft.mutate({ kind: 'supplier', id: r.id })}
+                          className="text-xs font-semibold text-red-600 hover:text-red-700"
+                        >
+                          Cancel draft
+                        </button>
+                      </span>
                     )}
                   </td>
                 </tr>

@@ -207,41 +207,6 @@ export class GstService {
       data: this.repository.hsnSummary(filters).map(mapHsnRow),
     };
   }
-
-  getPeriodLocks(companyId) {
-    return this.db
-      .prepare(
-        `
-      SELECT * FROM gst_period_locks 
-      WHERE company_id = ? 
-      ORDER BY tax_period DESC
-    `,
-      )
-      .all(companyId);
-  }
-
-  updatePeriodLock(companyId, taxPeriod, isLocked, userId) {
-    if (!/^\d{4}-\d{2}$/.test(taxPeriod)) {
-      throw new AppError('Tax period must be in YYYY-MM format.', 400, 'VALIDATION_ERROR');
-    }
-
-    return this.db.transaction(() => {
-      this.db
-        .prepare(
-          `
-        INSERT INTO gst_period_locks (company_id, tax_period, is_locked, locked_by, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(company_id, tax_period) DO UPDATE SET
-          is_locked = excluded.is_locked,
-          locked_by = excluded.locked_by,
-          updated_at = CURRENT_TIMESTAMP
-      `,
-        )
-        .run(companyId, taxPeriod, Number(isLocked), userId);
-
-      return { companyId, taxPeriod, isLocked: Boolean(isLocked) };
-    })();
-  }
 }
 
 export function createGstService(db) {

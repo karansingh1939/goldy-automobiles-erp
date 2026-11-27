@@ -13,7 +13,7 @@ passes, keep everything simple for a non-technical owner.
 | 1   | Fix known gaps: customer refund, counter sale screen, payment pays its own bill | Done (d98ad84) |
 | 2   | Unused-code scan (files, exports, API routes no screen calls)                   | Done           |
 | 3   | Remove dead modules: Sales Orders, demo mode, CRM loyalty/referrals/promotions  | Done (d98ad84) |
-| 4   | Remove remaining unused API routes and their dead service code                  | Pending        |
+| 4   | Remove remaining unused API routes and their dead service code                  | Done           |
 | 5   | Coverage run; read every file and fix or remove what is not needed              | Pending        |
 | 6   | Re-test every screen and button on a throwaway test copy                        | Pending        |
 | 7   | Write docs/system-design.md (architecture, data flow, every file and function)  | Pending        |

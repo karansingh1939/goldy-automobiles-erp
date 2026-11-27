@@ -2,6 +2,9 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { localDate } from '../../shared/utils/local-date.js';
 import { AuditRepository } from '../audit/audit.repository.js';
 import { AccountingPostingEngine } from './posting-engine.service.js';
+import { AllocationService } from './allocation.service.js';
+import { CustomerReceiptService } from './customer-receipt.service.js';
+import { SupplierPaymentService } from './supplier-payment.service.js';
 
 /**
  * Plain-language money screens for a non-accountant owner. Every entry is
@@ -30,6 +33,19 @@ const LAZY_LEDGERS = {
   loans_payable: { name: 'Loans', group: NON_CURRENT_LIABILITIES_GROUP, nature: 'Credit' },
   other_income: { name: 'Other Income', group: INDIRECT_INCOME_GROUP, nature: 'Credit' },
   staff_advances: { name: 'Staff Advances', group: CURRENT_ASSETS_GROUP, nature: 'Debit' },
+};
+
+// Entries made by another screen are cancelled there, so their stock or bill
+// is reversed too.
+const CANCEL_ELSEWHERE = {
+  invoices: 'Bills',
+  direct_invoices: 'Counter Sale',
+  expenses: 'Expenses',
+  purchase_receipts: 'Buy Stock',
+  purchase_returns: 'Returns',
+  customer_returns: 'Returns',
+  supplier_returns: 'Returns',
+  stock_adjustments: 'Stock',
 };
 
 const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
@@ -184,6 +200,8 @@ export class MoneyService {
         voucherType: 'Payment',
         voucherDate: date || localDate(),
         narration: `Refund to ${customer.name}${note ? `: ${String(note).trim().slice(0, 200)}` : ''}`,
+        referenceTable: 'customer_refunds',
+        referenceId: customer.id,
         created_by: userId,
         entries: [
           { ledgerId, type: 'DEBIT', amount: value },
@@ -215,6 +233,127 @@ export class MoneyService {
       });
       return { ...result, account: this.accountById(account.id) };
     })();
+  }
+
+  /**
+   * The last entries that moved cash or bank money, newest first, so a wrong
+   * entry can be found and cancelled.
+   */
+  recentEntries({ limit = 20 } = {}) {
+    const rows = this.db
+      .prepare(
+        `SELECT v.id, v.voucher_number AS number, v.voucher_date AS date, v.narration,
+           v.reference_table AS referenceTable, l.name AS account, l.system_key AS accountKey,
+           SUM(CASE WHEN je.entry_type = 'DEBIT' THEN je.amount ELSE -je.amount END) AS net
+         FROM vouchers v
+         JOIN journal_entries je ON je.voucher_id = v.id
+         JOIN ledgers l ON l.id = je.ledger_id
+         WHERE v.company_id = ? AND v.status != 'CANCELLED'
+           AND (l.system_key IN ('cash_in_hand', 'hdfc_bank') OR l.system_key LIKE 'bank_%')
+         GROUP BY v.id, l.id
+         ORDER BY v.id DESC
+         LIMIT ?`,
+      )
+      .all(this.companyId, Math.min(Number(limit) || 20, 100));
+    return rows.map((row) => {
+      const where = CANCEL_ELSEWHERE[row.referenceTable] || null;
+      return {
+        id: row.id,
+        number: row.number,
+        date: row.date,
+        narration: row.narration,
+        account: row.accountKey === 'cash_in_hand' ? 'Cash' : row.account,
+        direction: row.net >= 0 ? 'IN' : 'OUT',
+        amount: roundMoney(Math.abs(row.net)),
+        cancelWhere: where,
+      };
+    });
+  }
+
+  /**
+   * Cancels a wrong money entry. Customer and supplier payments are unmatched
+   * from their bills; salary and advances are removed from Staff & Salary.
+   */
+  cancelEntry(voucherId, userId = null) {
+    const voucher = this.db
+      .prepare('SELECT * FROM vouchers WHERE id = ? AND company_id = ?')
+      .get(voucherId, this.companyId);
+    if (!voucher) fail('Entry not found.', 'VOUCHER_NOT_FOUND', 404);
+    if (voucher.status === 'CANCELLED') fail('This entry is already cancelled.');
+    const where = CANCEL_ELSEWHERE[voucher.reference_table];
+    if (where) fail(`Cancel this on the ${where} screen.`, 'CANCEL_ELSEWHERE', 409);
+
+    return this.db.transaction(() => {
+      const receipt = this.db
+        .prepare('SELECT id FROM customer_receipts WHERE voucher_id = ?')
+        .get(voucher.id);
+      if (receipt) {
+        new CustomerReceiptService(this.db).cancelReceipt(receipt.id, this.companyId);
+      } else if (voucher.reference_table === 'supplier_payments') {
+        new SupplierPaymentService(
+          this.db,
+          this.postingEngine,
+          new AllocationService(this.db),
+        ).cancelPayment(this.companyId, voucher.reference_id);
+      } else {
+        const staff = this.db
+          .prepare('SELECT * FROM staff_payments WHERE voucher_id = ?')
+          .get(voucher.id);
+        if (staff?.kind === 'ADVANCE') {
+          const { left } = this.db
+            .prepare(
+              `SELECT ROUND(COALESCE(SUM(CASE WHEN kind = 'ADVANCE' THEN gross_amount ELSE -advance_deducted END), 0), 2) AS left
+               FROM staff_payments WHERE technician_id = ? AND id != ?`,
+            )
+            .get(staff.technician_id, staff.id);
+          if (left < 0)
+            fail('Part of this advance was already cut from a salary. Cancel that salary first.');
+        }
+        if (voucher.reference_table === 'customer_refunds') this.restoreAdvance(voucher);
+        this.postingEngine.deleteVoucher(this.companyId, voucher.id);
+        if (staff) this.db.prepare('DELETE FROM staff_payments WHERE id = ?').run(staff.id);
+      }
+      this.auditRepository.create({
+        userId,
+        action: 'CANCEL',
+        entityType: 'vouchers',
+        entityId: voucher.id,
+        oldValue: { number: voucher.voucher_number, narration: voucher.narration },
+      });
+      return { cancelled: true, id: voucher.id };
+    })();
+  }
+
+  /** Undoing a refund gives the customer their advance back on their receipts. */
+  restoreAdvance(voucher) {
+    const { value } = this.db
+      .prepare(
+        "SELECT ROUND(SUM(amount), 2) AS value FROM journal_entries WHERE voucher_id = ? AND entry_type = 'DEBIT'",
+      )
+      .get(voucher.id);
+    let left = roundMoney(value);
+    for (const receipt of this.db
+      .prepare(
+        "SELECT id, amount, unallocated_amount FROM customer_receipts WHERE customer_id = ? AND status = 'ACTIVE' ORDER BY id DESC",
+      )
+      .all(voucher.reference_id)) {
+      if (left <= 0) break;
+      const { allocated } = this.db
+        .prepare(
+          'SELECT COALESCE(SUM(allocated_amount), 0) AS allocated FROM receipt_allocations WHERE customer_receipt_id = ?',
+        )
+        .get(receipt.id);
+      const room = roundMoney(receipt.amount - allocated - receipt.unallocated_amount);
+      const give = roundMoney(Math.min(left, room));
+      if (give > 0) {
+        this.db
+          .prepare(
+            'UPDATE customer_receipts SET unallocated_amount = ROUND(unallocated_amount + ?, 2) WHERE id = ?',
+          )
+          .run(give, receipt.id);
+        left = roundMoney(left - give);
+      }
+    }
   }
 
   /**

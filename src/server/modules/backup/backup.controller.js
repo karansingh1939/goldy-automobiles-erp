@@ -61,17 +61,6 @@ export class BackupController {
       next(error);
     }
   };
-  restoreDatabase = async (req, res, next) => {
-    try {
-      const result = await this.restoreService.restoreDatabase({
-        backupFilePath: req.body.backupFilePath,
-        userId: req.user?.id,
-      });
-      res.status(200).json({ status: 'success', data: result });
-    } catch (error) {
-      next(error);
-    }
-  };
   restoreUploadedDatabase = async (req, res, next) => {
     const tempDir = path.join(env.appDataPath, 'temp');
     let tempFilePath;

@@ -17,7 +17,6 @@ export function createAuthRouter(db) {
   router.post('/login', controller.login);
   router.post('/logout', requireAuth, controller.logout);
   router.get('/me', requireAuth, controller.me);
-
   return router;
 }
 

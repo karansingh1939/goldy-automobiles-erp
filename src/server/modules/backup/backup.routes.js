@@ -23,7 +23,6 @@ export function createBackupRouter(db, backupScheduler) {
   router.get('/', requirePermission('backups.read'), controller.list);
   router.get('/settings', requirePermission('backups.read'), controller.getSettings);
   router.patch('/settings', requirePermission('backups.write'), controller.updateSettings);
-  router.post('/restore', requirePermission('backups.write'), controller.restoreDatabase);
   router.post(
     '/restore-latest',
     requirePermission('backups.write'),

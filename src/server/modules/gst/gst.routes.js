@@ -49,9 +49,5 @@ export function createGstRouter(db) {
     }
   });
 
-  // Period Locks endpoints
-  router.get('/locks', controller.getPeriodLocks);
-  router.post('/locks', requirePermission('gst.write'), controller.updatePeriodLock);
-
   return router;
 }

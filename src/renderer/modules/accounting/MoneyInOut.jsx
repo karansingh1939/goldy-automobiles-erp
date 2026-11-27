@@ -118,6 +118,7 @@ function MoneyForm({ direction, accounts, onDone }) {
         'invoices',
         'dashboard',
         'receivable-ageing',
+        'money-entries',
       ])
         client.invalidateQueries({ queryKey: [key] });
       addNotification(
@@ -353,6 +354,93 @@ function OpeningBalances({ accounts }) {
   );
 }
 
+/** Last entries that moved cash or bank money, with a way to undo a mistake. */
+function RecentEntries() {
+  const client = useQueryClient();
+  const addNotification = useAppStore((state) => state.addNotification);
+  const [confirmId, setConfirmId] = useState(null);
+  const entries = useQuery({
+    queryKey: ['money-entries'],
+    queryFn: () => api.get('/api/v1/accounting/money-entries?limit=20'),
+  });
+  const rows = Array.isArray(entries.data?.data) ? entries.data.data : [];
+  const cancel = useMutation({
+    mutationFn: (id) => api.post(`/api/v1/accounting/money-entries/${id}/cancel`, {}),
+    onSuccess: () => {
+      setConfirmId(null);
+      for (const key of [
+        'money-entries',
+        'money-accounts',
+        'supplier-ledger',
+        'invoices',
+        'staff-pay',
+        'dashboard',
+        'receivable-ageing',
+      ])
+        client.invalidateQueries({ queryKey: [key] });
+      addNotification('Entry cancelled. The money is back where it was.', 'success');
+    },
+    onError: (error) => addNotification(error.message || 'Could not cancel.', 'error'),
+  });
+  return (
+    <section className="space-y-3 rounded-xl border bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <h2 className="text-lg font-semibold">Last entries</h2>
+      <p className="text-sm text-gray-500">Entered something wrong? Cancel it here.</p>
+      {entries.error && <p role="alert">{entries.error.message}</p>}
+      {!rows.length && !entries.isPending && <p>No money entries yet.</p>}
+      <ul className="divide-y dark:divide-gray-800">
+        {rows.map((row) => (
+          <li key={`${row.id}-${row.account}`} className="flex flex-wrap items-center gap-3 py-2">
+            <span className="w-24 text-sm text-gray-500">{row.date}</span>
+            <span className="flex-1">{row.narration || row.number}</span>
+            <span className="text-sm text-gray-500">{row.account}</span>
+            <span
+              className={`w-28 text-right font-semibold ${row.direction === 'IN' ? 'text-green-700' : 'text-red-700'}`}
+            >
+              {row.direction === 'IN' ? '+' : '−'}
+              {rupees(row.amount)}
+            </span>
+            {row.cancelWhere ? (
+              <span className="w-40 text-right text-xs text-gray-500">
+                Cancel on {row.cancelWhere}
+              </span>
+            ) : confirmId === row.id ? (
+              <span className="flex w-40 justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded bg-red-600 px-2 py-1 text-sm text-white"
+                  disabled={cancel.isPending}
+                  onClick={() => cancel.mutate(row.id)}
+                >
+                  Yes, cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded border px-2 py-1 text-sm"
+                  onClick={() => setConfirmId(null)}
+                >
+                  No
+                </button>
+              </span>
+            ) : (
+              <span className="flex w-40 justify-end">
+                <button
+                  type="button"
+                  className="rounded border px-2 py-1 text-sm"
+                  aria-label={`Cancel entry ${row.number}`}
+                  onClick={() => setConfirmId(row.id)}
+                >
+                  Cancel
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function MoneyInOut() {
   const client = useQueryClient();
   const addNotification = useAppStore((state) => state.addNotification);
@@ -515,6 +603,7 @@ export default function MoneyInOut() {
         )}
       </section>
 
+      <RecentEntries />
       <OpeningBalances accounts={accounts} />
     </div>
   );

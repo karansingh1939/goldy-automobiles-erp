@@ -64,40 +64,4 @@ export class LedgerResolverService {
     this.cache.set(cacheKey, row);
     return row;
   }
-
-  /**
-   * Pre-populates the cache with all system ledgers for a company to prevent query latency.
-   *
-   * @param {number} companyId - Company ID to warm cache for
-   */
-  warmCache(companyId) {
-    if (!companyId) {
-      throw new AppError('Company ID is required to warm cache.', 400, 'RESOLVER_INVALID_COMPANY');
-    }
-
-    const rows = this.db
-      .prepare('SELECT * FROM ledgers WHERE company_id = ? AND system_key IS NOT NULL')
-      .all(companyId);
-    for (const row of rows) {
-      this.cache.set(`${companyId}:${row.system_key}`, row);
-    }
-  }
-
-  /**
-   * Clears the cache for a specific company or clears the entire cache.
-   *
-   * @param {number} [companyId] - Optional company ID. If omitted, clears all cache entries.
-   */
-  clearCache(companyId) {
-    if (companyId) {
-      const prefix = `${companyId}:`;
-      for (const key of this.cache.keys()) {
-        if (key.startsWith(prefix)) {
-          this.cache.delete(key);
-        }
-      }
-    } else {
-      this.cache.clear();
-    }
-  }
 }

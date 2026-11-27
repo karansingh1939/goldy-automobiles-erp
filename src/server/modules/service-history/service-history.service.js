@@ -130,36 +130,6 @@ export class ServiceHistoryService {
       history,
     };
   }
-
-  /**
-   * Generates service history for all vehicles owned by a customer.
-   *
-   * @param {number} customerId - Target customer ID
-   * @returns {object} The customer service history DTO
-   */
-  getCustomerServiceHistory(customerId) {
-    const customer = this.repository.getCustomerById(customerId);
-    if (!customer) {
-      throw new AppError('Customer not found.', 404, 'ITEM_NOT_FOUND');
-    }
-
-    const vehicles = this.repository.getVehiclesByCustomerId(customerId);
-    const vehicleHistories = [];
-
-    for (const vehicle of vehicles) {
-      const historyData = this.getVehicleServiceHistory(vehicle.id);
-      vehicleHistories.push({
-        vehicle: historyData.vehicle,
-        summary: historyData.summary,
-        history: historyData.history,
-      });
-    }
-
-    return {
-      customer,
-      vehicles: vehicleHistories,
-    };
-  }
 }
 
 /**

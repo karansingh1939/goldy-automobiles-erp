@@ -121,11 +121,7 @@ test('profit combines workshop and direct sales and active journal expenses with
       new AccountingReportService(db).getProfitLoss(1, june.dateFrom, june.dateTo).netProfit,
       summary.netProfit,
     );
-    assert.deepEqual(profits.byMonth(june).data, [
-      { month: '2026-06', revenue: 500, cost: 170, grossProfit: 330, expenses: 50, netProfit: 280 },
-    ]);
     assert.equal(profits.byCustomer(june).data[0].profit, 330);
-    assert.equal(profits.byInventoryItem(june).data[0].profit, 330);
     const dashboard = new DashboardService(db);
     assert.equal(dashboard.getSalesMetrics('2026-06-30').summary.invoicesThisMonth, 2);
     assert.equal(dashboard.getFinancialMetrics('2026-06-30').outstandingAmount, 300);
@@ -148,9 +144,6 @@ test('expense-only months include active journal expenses once and exclude cance
     db.prepare('UPDATE expenses SET voucher_id = NULL WHERE id = ?').run(expense.id);
     const profits = new ProfitService(db);
     assert.equal(profits.summary(june).data.totalExpenses, 40);
-    assert.deepEqual(profits.byMonth(june).data, [
-      { month: '2026-06', revenue: 0, cost: 0, grossProfit: 0, expenses: 40, netProfit: -40 },
-    ]);
     new AccountingPostingEngine(db).deleteVoucher(1, expense.voucher_id);
     assert.equal(profits.summary(june).data.totalExpenses, 0);
     const other = expenses.create({ expense_date: '2026-06-12', category: 'Salary', amount: 20 });
@@ -185,7 +178,6 @@ test('direct profit uses exact persisted line cost instead of rounding unit cost
     const profits = new ProfitService(db);
     assert.equal(profits.summary(june).data.totalCost, 90.01);
     assert.equal(profits.byCustomer(june).data[0].profit, 9.99);
-    assert.equal(profits.byInventoryItem(june).data[0].profit, 9.99);
   } finally {
     await context.close();
   }
@@ -264,14 +256,7 @@ test('completed discounted returns reverse operational profit on return date and
       new AccountingReportService(db).getProfitLoss(1, june.dateFrom, june.dateTo).netProfit,
       -120,
     );
-    assert.equal(profits.byMonth(june).data[0].netProfit, -120);
-    for (const data of [
-      profits.byCustomer(june).data,
-      profits.byInventoryItem(june).data,
-      profits.byVehicle(june).data,
-      profits.byMechanic(june).data,
-    ])
-      assert.equal(data[0].profit, -120);
+    assert.equal(profits.byCustomer(june).data[0].profit, -120);
     assert.equal(
       new DashboardService(db).getFinancialMetrics('2026-06-30').thisMonth.revenue,
       -200,

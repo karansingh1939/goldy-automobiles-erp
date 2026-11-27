@@ -204,26 +204,4 @@ export class WarrantyRepository {
 
     return this.findWarrantyClaimById(id);
   }
-
-  findActiveRegistrationByItem(customerId, vehicleId, itemId) {
-    const clauses = ['customer_id = ?', 'item_id = ?', "status = 'ACTIVE'"];
-    const params = [customerId, itemId];
-
-    if (vehicleId) {
-      clauses.push('vehicle_id = ?');
-      params.push(vehicleId);
-    }
-
-    const where = `WHERE ${clauses.join(' AND ')}`;
-    return this.db
-      .prepare(
-        `
-      SELECT * FROM warranty_registrations
-      ${where}
-      ORDER BY end_date DESC
-      LIMIT 1
-    `,
-      )
-      .get(params);
-  }
 }

@@ -157,23 +157,4 @@ export class DashboardRepository {
       )
       .all(limit);
   }
-
-  getRevenueByCategory(dateFrom, dateTo) {
-    return this.db
-      .prepare(
-        `
-      SELECT 
-        item_type AS category,
-        ROUND(SUM(line_revenue), 2) AS revenue
-      FROM invoice_items
-      JOIN invoices ON invoices.id = invoice_items.invoice_id
-      WHERE invoices.status = 'FINALIZED'
-        AND DATE(invoices.invoice_date) >= DATE(?)
-        AND DATE(invoices.invoice_date) <= DATE(?)
-      GROUP BY item_type
-      ORDER BY revenue DESC
-    `,
-      )
-      .all(dateFrom, dateTo);
-  }
 }

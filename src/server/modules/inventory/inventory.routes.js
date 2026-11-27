@@ -34,13 +34,6 @@ export function createInventoryRouter(db) {
   router.get('/reports/valuation', requirePermission('inventory.read'), controller.stockValuation);
   router.get('/reports/movements', requirePermission('inventory.read'), controller.movements);
   router.get('/reports/low-stock', requirePermission('inventory.read'), controller.lowStock);
-  router.get('/reports/expiring', requirePermission('inventory.read'), controller.expiringStock);
-  router.get(
-    '/reports/reconciliation',
-    requirePermission('inventory.read'),
-    controller.reconcileInventory,
-  );
-
   router.get('/assets', requirePermission('inventory.read'), controller.listFixedAssets);
   router.post('/assets', requirePermission('inventory.write'), controller.createFixedAsset);
 
@@ -59,23 +52,6 @@ export function createInventoryRouter(db) {
     '/verifications/:id/reject',
     requirePermission('inventory.adjust'),
     controller.rejectVerification,
-  );
-
-  router.get(
-    '/warehouses/:id/permissions',
-    requirePermission('warehouses.write'),
-    controller.getWarehousePermissions,
-  );
-  router.post(
-    '/warehouses/:id/permissions',
-    requirePermission('warehouses.write'),
-    controller.saveWarehousePermissions,
-  );
-
-  router.post(
-    '/transfers/:id/cancel',
-    requirePermission('inventory.adjust'),
-    controller.cancelTransfer,
   );
 
   return router;

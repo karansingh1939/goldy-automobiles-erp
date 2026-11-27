@@ -69,18 +69,6 @@ export class WarrantyController {
     }
   };
 
-  getWarrantyClaimById = async (req, res, next) => {
-    try {
-      const data = this.service.repository.findWarrantyClaimById(Number(req.params.id));
-      if (!data) {
-        return res.status(404).json({ error: { message: 'Warranty claim not found.' } });
-      }
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
-
   listWarrantyClaims = async (req, res, next) => {
     try {
       const query = {
@@ -89,57 +77,6 @@ export class WarrantyController {
       };
       const data = this.service.repository.listWarrantyClaims(query);
       res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  lookupWarranty = async (req, res, next) => {
-    try {
-      const data = this.service.lookupWarranty(req.query);
-      res.status(200).json({ data });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  // REPORTS
-  getStatusCountReport = async (req, res, next) => {
-    try {
-      const companyId = req.query.companyId ? Number(req.query.companyId) : 1;
-      const rows = this.service.db
-        .prepare(
-          `
-        SELECT w.status, COUNT(*) as count
-        FROM warranty_registrations w
-        WHERE w.company_id = ?
-        GROUP BY w.status
-      `,
-        )
-        .all(companyId);
-      res.status(200).json({ data: rows });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  getFailureAnalysisReport = async (req, res, next) => {
-    try {
-      const companyId = req.query.companyId ? Number(req.query.companyId) : 1;
-      const rows = this.service.db
-        .prepare(
-          `
-        SELECT item.sku, item.item_name, COUNT(*) as claimCount
-        FROM warranty_claims c
-        JOIN warranty_registrations w ON c.warranty_registration_id = w.id
-        JOIN inventory_items item ON w.item_id = item.id
-        WHERE c.company_id = ?
-        GROUP BY item.id
-        ORDER BY claimCount DESC
-      `,
-        )
-        .all(companyId);
-      res.status(200).json({ data: rows });
     } catch (error) {
       next(error);
     }

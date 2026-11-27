@@ -20,11 +20,6 @@ export function createStaffPayRouter(db) {
     requirePermission('accounting.read'),
     handle(200, (req) => service.summary(req.query.month)),
   );
-  router.get(
-    '/:id/history',
-    requirePermission('accounting.read'),
-    handle(200, (req) => service.history(req.params.id)),
-  );
   router.patch(
     '/:id/salary',
     requirePermission('accounting.write'),

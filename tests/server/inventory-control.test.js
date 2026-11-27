@@ -59,41 +59,6 @@ test('Advanced Inventory Control & Warehouse Operations Sprint 6', async () => {
     assert.equal(res.body.data.parent_warehouse_id, hubId);
 
     // ----------------------------------------------------
-    // 2. USER-WAREHOUSE PERMISSIONS
-    // ----------------------------------------------------
-    // Seed a standard user to test restricted permissions
-    const bcrypt = await import('bcryptjs');
-    const staffHash = await bcrypt.default.hash('Admin@12345', 10);
-    const testUserId = db
-      .prepare(
-        `
-      INSERT INTO users (name, username, password_hash, role_id, is_active)
-      VALUES ('Staff User', 'staff', ?, 2, 1)
-    `,
-      )
-      .run(staffHash).lastInsertRowid; // Role 2 is usually Manager or User
-
-    // Assign staff user access only to Shelf A
-    res = await context.request(`/api/v1/inventory/warehouses/${shelfId}/permissions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ userIds: [testUserId] }),
-    });
-    assert.equal(res.response.status, 200);
-
-    // Get permissions back and verify
-    res = await context.request(`/api/v1/inventory/warehouses/${shelfId}/permissions`, {
-      method: 'GET',
-      headers,
-    });
-    assert.equal(res.response.status, 200);
-    assert.ok(res.body.data.userIds.includes(testUserId));
-
-    // Login as staff user
-    const staffToken = await login(context, 'staff', 'Admin@12345');
-    assert.ok(staffToken);
-
-    // ----------------------------------------------------
     // 3. STOCK ADJUSTMENTS & DOUBLE-ENTRY ACCOUNTING
     // ----------------------------------------------------
     // Seed default supplier
@@ -230,23 +195,29 @@ test('Advanced Inventory Control & Warehouse Operations Sprint 6', async () => {
     });
     assert.equal(res.response.status, 201);
 
-    // Reverse/Cancel the first transfer (Completed)
-    res = await context.request(`/api/v1/inventory/transfers/${transferId}/cancel`, {
+    // A wrong move is put right by moving the stock back
+    res = await context.request('/api/v1/inventory/transfers', {
       method: 'POST',
       headers,
+      body: JSON.stringify({
+        item_id: itemId,
+        from_warehouse_id: shelfId,
+        to_warehouse_id: hubId,
+        quantity: 4,
+        notes: 'Move 4 back',
+      }),
     });
-    assert.equal(res.response.status, 200);
-    assert.equal(res.body.data.status, 'CANCELLED');
+    assert.equal(res.response.status, 201);
+    assert.equal(res.body.data.status, 'COMPLETED');
 
-    // Verify stock returned to hub (6 + 4 = 10) and deducted from shelf (4 - 4 = 0)
     const hubQtyReversed = db
       .prepare('SELECT quantity FROM inventory_batches WHERE item_id = ? AND warehouse_id = ?')
       .get(itemId, hubId).quantity;
-    assert.equal(hubQtyReversed, 7); // 10 - 4 - 3 = 3, then the first move is reversed: 3 + 4 = 7
+    assert.equal(hubQtyReversed, 7); // 10 - 4 - 3 = 3, then 4 moved back: 3 + 4 = 7
     const shelfQtyReversed = db
       .prepare('SELECT quantity FROM inventory_batches WHERE item_id = ? AND warehouse_id = ?')
       .get(itemId, shelfId).quantity;
-    assert.equal(shelfQtyReversed, 3); // 4 + 3 = 7, then the first move is reversed: 7 - 4 = 3
+    assert.equal(shelfQtyReversed, 3); // 4 + 3 = 7, then 4 moved back: 7 - 4 = 3
 
     // ----------------------------------------------------
     // 5. PHYSICAL STOCK VERIFICATION APPROVAL WORKFLOW
@@ -330,16 +301,17 @@ test('Advanced Inventory Control & Warehouse Operations Sprint 6', async () => {
     assert.ok(res.body.totals.value > 0);
 
     // ----------------------------------------------------
-    // 8. INVENTORY RECONCILIATION REPORT
+    // 8. STOCK TOTALS MATCH THE BATCHES
     // ----------------------------------------------------
-    res = await context.request('/api/v1/inventory/reports/reconciliation', {
-      method: 'GET',
-      headers,
-    });
-    assert.equal(res.response.status, 200);
-    assert.ok(res.body.data.ledgerBalance !== undefined);
-    assert.ok(res.body.data.totalValuation !== undefined);
-    assert.equal(res.body.data.quantityMismatchCount, 0); // They should match perfectly!
+    const mismatches = db
+      .prepare(
+        `SELECT i.id FROM inventory_items i
+         LEFT JOIN inventory_batches b ON b.item_id = i.id
+         GROUP BY i.id
+         HAVING ROUND(i.current_quantity, 3) != ROUND(COALESCE(SUM(b.quantity), 0), 3)`,
+      )
+      .all();
+    assert.deepEqual(mismatches, []);
   } finally {
     await context.close();
   }

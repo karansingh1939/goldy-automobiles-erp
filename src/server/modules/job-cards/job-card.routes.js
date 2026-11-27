@@ -12,71 +12,6 @@ export function createJobCardRouter(db) {
 
   router.use(requireAuth);
 
-  // Autocomplete and Lookup APIs
-  router.get('/autocomplete/vehicles', requirePermission('job_cards.read'), (req, res, next) => {
-    try {
-      const q = `%${req.query.q || ''}%`;
-      const qNormalized = `%${String(req.query.q || '')
-        .replace(/[^a-zA-Z0-9]/g, '')
-        .toUpperCase()}%`;
-      const rows = db
-        .prepare(
-          `
-        SELECT
-          v.*,
-          c.name AS customer_name,
-          c.phone AS customer_phone,
-          c.address AS customer_address,
-          c.city AS customer_city,
-          c.notes AS customer_notes,
-          (SELECT COUNT(*) FROM vehicles WHERE customer_id = c.id) AS customer_vehicle_count,
-          (SELECT COUNT(*) FROM job_cards WHERE customer_id = c.id) AS customer_job_card_count,
-          (SELECT MAX(opened_at) FROM job_cards WHERE customer_id = c.id) AS customer_last_visit_at
-        FROM vehicles v
-        JOIN customers c ON c.id = v.customer_id
-        WHERE v.registration_number LIKE ? 
-           OR v.registration_number_normalized LIKE ?
-        ORDER BY
-          customer_last_visit_at DESC,
-          customer_job_card_count DESC,
-          v.registration_number ASC
-        LIMIT 10
-      `,
-        )
-        .all(q, qNormalized);
-      res.status(200).json({ data: rows });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/autocomplete/customers', requirePermission('job_cards.read'), (req, res, next) => {
-    try {
-      const q = `%${req.query.q || ''}%`;
-      const rows = db
-        .prepare(
-          `
-        SELECT
-          c.*,
-          (SELECT COUNT(*) FROM vehicles WHERE customer_id = c.id) AS vehicle_count,
-          (SELECT COUNT(*) FROM job_cards WHERE customer_id = c.id) AS job_card_count,
-          (SELECT MAX(opened_at) FROM job_cards WHERE customer_id = c.id) AS last_visit_at
-        FROM customers c
-        WHERE c.name LIKE ? OR c.phone LIKE ?
-        ORDER BY
-          last_visit_at DESC,
-          job_card_count DESC,
-          c.name ASC
-        LIMIT 10
-      `,
-        )
-        .all(q, q);
-      res.status(200).json({ data: rows });
-    } catch (err) {
-      next(err);
-    }
-  });
-
   router.get('/customers/lookup', requirePermission('job_cards.read'), (req, res, next) => {
     try {
       const phone = req.query.phone;
@@ -208,40 +143,6 @@ export function createJobCardRouter(db) {
             lastComplaint: lastJobCard ? lastJobCard.complaint : null,
             outstandingBalance,
           },
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/customers/:id/details', requirePermission('job_cards.read'), (req, res, next) => {
-    try {
-      const customerId = Number(req.params.id);
-      const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
-      if (!customer) {
-        return res.status(404).json({ error: { message: 'Customer not found.' } });
-      }
-      const vehicles = db.prepare('SELECT * FROM vehicles WHERE customer_id = ?').all(customerId);
-      const stats = db
-        .prepare(
-          `
-        SELECT
-          COUNT(id) AS job_card_count,
-          MAX(opened_at) AS last_visit_at
-        FROM job_cards
-        WHERE customer_id = ?
-      `,
-        )
-        .get(customerId);
-
-      res.status(200).json({
-        data: {
-          ...customer,
-          vehicle_count: vehicles.length,
-          job_card_count: stats.job_card_count,
-          last_visit_at: stats.last_visit_at,
-          vehicles,
         },
       });
     } catch (err) {

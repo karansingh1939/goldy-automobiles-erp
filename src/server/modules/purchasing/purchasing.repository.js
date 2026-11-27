@@ -297,108 +297,6 @@ export class PurchasingRepository {
       .all(receiptId);
   }
 
-  createPurchaseReturn(data) {
-    const result = this.db
-      .prepare(
-        `
-      INSERT INTO purchase_returns (
-        return_number,
-        purchase_id,
-        supplier_id,
-        return_date,
-        notes,
-        created_by
-      )
-      VALUES (
-        @return_number,
-        @purchase_id,
-        @supplier_id,
-        @return_date,
-        @notes,
-        @created_by
-      )
-    `,
-      )
-      .run(data);
-
-    return result.lastInsertRowid;
-  }
-
-  updatePurchaseReturnTotals(id, totals) {
-    this.db
-      .prepare(
-        `
-      UPDATE purchase_returns
-      SET subtotal = @subtotal,
-          gst_total = @gst_total,
-          grand_total = @grand_total
-      WHERE id = @id
-    `,
-      )
-      .run({ ...totals, id });
-  }
-
-  createPurchaseReturnItem(data) {
-    const result = this.db
-      .prepare(
-        `
-      INSERT INTO purchase_return_items (
-        purchase_return_id,
-        item_id,
-        batch_id,
-        warehouse_id,
-        quantity,
-        unit_cost,
-        gst_rate,
-        gst_amount,
-        line_total
-      )
-      VALUES (
-        @purchase_return_id,
-        @item_id,
-        @batch_id,
-        @warehouse_id,
-        @quantity,
-        @unit_cost,
-        @gst_rate,
-        @gst_amount,
-        @line_total
-      )
-    `,
-      )
-      .run(data);
-
-    return result.lastInsertRowid;
-  }
-
-  findPurchaseReturnById(id) {
-    return this.db
-      .prepare(
-        `
-      SELECT purchase_returns.*, suppliers.name AS supplier_name
-      FROM purchase_returns
-      JOIN suppliers ON suppliers.id = purchase_returns.supplier_id
-      WHERE purchase_returns.id = ?
-    `,
-      )
-      .get(id);
-  }
-
-  listPurchaseReturnItems(returnId) {
-    return this.db
-      .prepare(
-        `
-      SELECT purchase_return_items.*, inventory_items.sku, inventory_items.item_name, warehouses.name AS warehouse_name
-      FROM purchase_return_items
-      JOIN inventory_items ON inventory_items.id = purchase_return_items.item_id
-      JOIN warehouses ON warehouses.id = purchase_return_items.warehouse_id
-      WHERE purchase_return_items.purchase_return_id = ?
-      ORDER BY purchase_return_items.id
-    `,
-      )
-      .all(returnId);
-  }
-
   latestSupplierBalance(supplierId) {
     return (
       this.db
@@ -471,6 +369,8 @@ export class PurchasingRepository {
             (SELECT receipt_number FROM purchase_receipts WHERE id = supplier_ledgers.reference_id)
           WHEN 'purchase_returns' THEN 'Return ' ||
             (SELECT return_number FROM purchase_returns WHERE id = supplier_ledgers.reference_id)
+          WHEN 'supplier_returns' THEN 'Return ' ||
+            (SELECT return_number FROM supplier_returns WHERE id = supplier_ledgers.reference_id)
           WHEN 'supplier_payments' THEN 'Payment ' ||
             (SELECT payment_number FROM supplier_payments WHERE id = supplier_ledgers.reference_id)
         END AS reference_label

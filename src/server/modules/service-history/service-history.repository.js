@@ -76,38 +76,6 @@ export class ServiceHistoryRepository {
   }
 
   /**
-   * Retrieves all vehicle records owned by a specific customer.
-   * @param {number} customerId - The owner's customer ID.
-   * @returns {Array<object>} List of vehicles.
-   */
-  getVehiclesByCustomerId(customerId) {
-    return this.db
-      .prepare(
-        `
-      SELECT 
-        id,
-        customer_id AS customerId,
-        registration_number AS registrationNumber,
-        make,
-        model,
-        variant,
-        fuel_type AS fuelType,
-        year,
-        vin,
-        engine_number AS engineNumber,
-        chassis_number AS chassisNumber,
-        odometer_reading AS odometerReading,
-        created_at AS createdAt,
-        updated_at AS updatedAt
-      FROM vehicles
-      WHERE customer_id = ?
-      ORDER BY registration_number ASC
-    `,
-      )
-      .all(customerId);
-  }
-
-  /**
    * Retrieves basic service visits (paired job cards & invoices) for a specific vehicle.
    * Elements are ordered chronologically descending by date.
    *

@@ -16,12 +16,5 @@ export function createProfitRouter(db) {
 
   router.use(requirePermission('profit.read'));
 
-  router.get('/summary', controller.summary);
-  router.get('/by-month', controller.byMonth);
-  router.get('/by-customer', controller.byCustomer);
-  router.get('/by-vehicle', controller.byVehicle);
-  router.get('/by-inventory-item', controller.byInventoryItem);
-  router.get('/by-mechanic', controller.byMechanic);
-
   return router;
 }

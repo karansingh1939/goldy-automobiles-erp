@@ -27,11 +27,5 @@ export function createServiceHistoryRouter(db) {
     controller.getVehicleServiceHistory,
   );
 
-  router.get(
-    '/customers/:customerId/service-history',
-    requirePermission('customers.read'),
-    controller.getCustomerServiceHistory,
-  );
-
   return router;
 }

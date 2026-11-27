@@ -466,19 +466,4 @@ export class ReturnsRepository {
       )
       .get(excludeReturnId, excludeReturnId, source.source_table, source.id, source.batch_id).total;
   }
-
-  findPurchaseById(id) {
-    return this.db.prepare('SELECT * FROM purchases WHERE id = ?').get(id);
-  }
-
-  findPurchaseItem(purchaseId, itemId) {
-    return this.db
-      .prepare(
-        `
-      SELECT * FROM purchase_items
-      WHERE purchase_id = ? AND item_id = ?
-    `,
-      )
-      .get(purchaseId, itemId);
-  }
 }

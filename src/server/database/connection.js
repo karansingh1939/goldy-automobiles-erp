@@ -42,10 +42,11 @@ export function createDatabase(filePath = env.dbFile, { allowRestoreLock = false
 
   const db = new Database(resolvedPath);
   try {
+    // Wait for a busy file before anything else, including the WAL switch.
+    db.pragma('busy_timeout = 10000');
     db.pragma('foreign_keys = ON');
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
-    db.pragma('busy_timeout = 10000');
 
     // 1. Verify connection safety settings
     DbSafetyService.verifyConfiguration(db);

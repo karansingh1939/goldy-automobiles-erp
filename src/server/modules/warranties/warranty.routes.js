@@ -11,24 +11,8 @@ export function createWarrantyRouter(db) {
 
   router.use(requireAuth);
 
-  // Reports
-  router.get(
-    '/reports/status-count',
-    requirePermission('warranty.read'),
-    controller.getStatusCountReport,
-  );
-  router.get(
-    '/reports/failure-analysis',
-    requirePermission('warranty.read'),
-    controller.getFailureAnalysisReport,
-  );
-
-  // Lookup
-  router.get('/lookup', requirePermission('warranty.read'), controller.lookupWarranty);
-
   // Claims
   router.get('/claims', requirePermission('warranty.read'), controller.listWarrantyClaims);
-  router.get('/claims/:id', requirePermission('warranty.read'), controller.getWarrantyClaimById);
   router.post('/claims', requirePermission('warranty.write'), controller.fileClaim);
   router.post('/claims/:id/approve', requirePermission('warranty.write'), controller.settleClaim);
   router.post('/claims/:id/reject', requirePermission('warranty.write'), controller.rejectClaim);

@@ -146,7 +146,7 @@ test('credit notes reduce document balances, receipt ceilings and payment status
       f.user,
     );
     f.returns.completeCustomerReturn(ret.id, f.user);
-    assert.equal(allocations.getOutstandingReceivables(1, f.customer)[0].outstandingAmount, 118);
+    assert.equal(allocations.getOutstanding('CUSTOMER', 1, f.customer)[0].outstandingAmount, 118);
     const payment = new CustomerReceiptService(f.db).createReceipt({
       customerId: f.customer,
       receiptDate: localDate(),
@@ -169,7 +169,7 @@ test('credit notes reduce document balances, receipt ceilings and payment status
       'PAID',
     );
     new CustomerReceiptService(f.db).cancelReceipt(payment.receiptId);
-    assert.equal(allocations.getOutstandingReceivables(1, f.customer)[0].outstandingAmount, 118);
+    assert.equal(allocations.getOutstanding('CUSTOMER', 1, f.customer)[0].outstandingAmount, 118);
   } finally {
     await f.close();
   }
@@ -207,7 +207,7 @@ test('return after full payment preserves cash receipt and leaves customer credi
       f.db.prepare('SELECT payment_status FROM invoices WHERE id=?').get(inv.id).payment_status,
       'PAID',
     );
-    assert.deepEqual(new AllocationService(f.db).getOutstandingReceivables(1, f.customer), []);
+    assert.deepEqual(new AllocationService(f.db).getOutstanding('CUSTOMER', 1, f.customer), []);
   } finally {
     await f.close();
   }
@@ -257,12 +257,12 @@ test('partial return releases only excess allocations and receipt cancellation p
     );
     receipts.cancelReceipt(second.receiptId);
     assert.equal(
-      new AllocationService(f.db).getOutstandingReceivables(1, f.customer)[0].outstandingAmount,
+      new AllocationService(f.db).getOutstanding('CUSTOMER', 1, f.customer)[0].outstandingAmount,
       18,
     );
     receipts.cancelReceipt(first.receiptId);
     assert.equal(
-      new AllocationService(f.db).getOutstandingReceivables(1, f.customer)[0].outstandingAmount,
+      new AllocationService(f.db).getOutstanding('CUSTOMER', 1, f.customer)[0].outstandingAmount,
       118,
     );
   } finally {

@@ -1,22 +1,22 @@
 import { AppError } from '../../shared/errors/app-error.js';
+import { recordSupplierLedgerEntry } from '../purchasing/supplier-ledger.js';
 
 function roundMoney(val) {
   return Math.round(val * 100) / 100;
 }
 
-/** Keeps the Supplier Ledger screen (supplier_ledgers) in step with payments. */
 function recordSupplierLedger(db, { supplierId, date, paymentId, debit, credit, notes, userId }) {
-  const last = db
-    .prepare(
-      'SELECT balance_after FROM supplier_ledgers WHERE supplier_id = ? ORDER BY id DESC LIMIT 1',
-    )
-    .get(supplierId);
-  const balance = roundMoney(Number(last?.balance_after || 0) + credit - debit);
-  db.prepare(
-    `INSERT INTO supplier_ledgers
-       (supplier_id, entry_date, entry_type, reference_type, reference_id, debit, credit, balance_after, notes, created_by)
-     VALUES (?, ?, 'Payment', 'supplier_payments', ?, ?, ?, ?, ?, ?)`,
-  ).run(supplierId, date, paymentId, debit, credit, balance, notes || null, userId || null);
+  recordSupplierLedgerEntry(db, {
+    supplierId,
+    date,
+    entryType: 'Payment',
+    referenceType: 'supplier_payments',
+    referenceId: paymentId,
+    debit,
+    credit,
+    notes,
+    userId,
+  });
 }
 
 /**

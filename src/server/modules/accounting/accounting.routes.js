@@ -8,11 +8,7 @@ import { AllocationService } from './allocation.service.js';
 import { CustomerReceiptService } from './customer-receipt.service.js';
 import { DirectBillingService } from './direct-billing.service.js';
 import { ReconciliationService } from './reconciliation.service.js';
-import { createInventoryService } from '../inventory/inventory.service.js';
-import { SupplierService } from './supplier.service.js';
-import { PurchaseBillService } from './purchase-bill.service.js';
 import { SupplierPaymentService } from './supplier-payment.service.js';
-import { AppError } from '../../shared/errors/app-error.js';
 import { WorkshopFinanceService } from './workshop-finance.service.js';
 
 export function createAccountingRouter(db) {
@@ -26,9 +22,6 @@ export function createAccountingRouter(db) {
   const receiptService = new CustomerReceiptService(db);
   const directBillingService = new DirectBillingService(db);
   const reconciliationService = new ReconciliationService(db);
-  const inventoryService = createInventoryService(db);
-  const supplierService = new SupplierService(db, postingEngine);
-  const purchaseBillService = new PurchaseBillService(db, postingEngine, inventoryService);
   const supplierPaymentService = new SupplierPaymentService(db, postingEngine, allocationService);
 
   // Authenticate all routes
@@ -197,21 +190,6 @@ export function createAccountingRouter(db) {
 
   // --- CUSTOMER RECEIPTS & ALLOCATION ENDPOINTS ---
 
-  // Get outstanding invoices and direct invoices for a customer
-  router.get(
-    '/customers/:id/outstanding',
-    requirePermission('accounting.read'),
-    (req, res, next) => {
-      try {
-        const companyId = 1;
-        const list = allocationService.getOutstandingReceivables(companyId, req.params.id);
-        res.status(200).json({ status: 'success', data: list });
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
-
   // Record a customer receipt
   router.post('/receipts', requirePermission('accounting.write'), (req, res, next) => {
     try {
@@ -234,27 +212,6 @@ export function createAccountingRouter(db) {
         message: 'Receipt posted successfully.',
         data: result,
       });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // Manually allocate receipt to outstanding invoices
-  router.post('/receipts/:id/allocate', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      receiptService.allocateReceiptManual(req.params.id, req.body.allocations);
-      res.status(200).json({ status: 'success', message: 'Receipt allocated successfully.' });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // Cancel receipt
-  router.delete('/receipts/:id', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      receiptService.cancelReceipt(req.params.id, companyId);
-      res.status(200).json({ status: 'success', message: 'Receipt cancelled successfully.' });
     } catch (err) {
       next(err);
     }
@@ -330,6 +287,16 @@ export function createAccountingRouter(db) {
     requirePermission('accounting.write'),
     handle(201, (req) => moneyService.recordOther(req.body, req.user.id)),
   );
+  router.get(
+    '/money-entries',
+    requirePermission('accounting.read'),
+    handle(200, (req) => moneyService.recentEntries(req.query)),
+  );
+  router.post(
+    '/money-entries/:id/cancel',
+    requirePermission('accounting.write'),
+    handle(200, (req) => moneyService.cancelEntry(Number(req.params.id), req.user.id)),
+  );
   router.post(
     '/customer-refunds',
     requirePermission('accounting.write'),
@@ -360,66 +327,6 @@ export function createAccountingRouter(db) {
         status: 'success',
         message: 'Voucher posted successfully.',
         data: result,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // Fetch details of a specific voucher with all ledger posting lines
-  router.get('/vouchers/:id', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const voucher = db
-        .prepare('SELECT * FROM vouchers WHERE id = ? AND company_id = ?')
-        .get(req.params.id, companyId);
-      if (!voucher) {
-        return res.status(404).json({ error: { message: 'Voucher not found.' } });
-      }
-
-      const entries = db
-        .prepare(
-          `
-        SELECT je.*, l.name AS ledger_name, l.nature AS ledger_nature
-        FROM journal_entries je
-        JOIN ledgers l ON je.ledger_id = l.id
-        WHERE je.voucher_id = ?
-        ORDER BY je.entry_type DESC, je.id ASC
-      `,
-        )
-        .all(voucher.id);
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          ...voucher,
-          entries,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // Integrated vouchers must be cancelled through their owning document workflow.
-  router.delete('/vouchers/:id', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const voucher = db
-        .prepare('SELECT reference_table FROM vouchers WHERE id = ? AND company_id = ?')
-        .get(req.params.id, companyId);
-      if (voucher?.reference_table) {
-        throw new AppError(
-          'Cancel this voucher through its invoice, payment, expense or stock document.',
-          409,
-          'INTEGRATED_VOUCHER_LOCKED',
-        );
-      }
-      postingEngine.deleteVoucher(companyId, req.params.id);
-
-      res.status(200).json({
-        status: 'success',
-        message: 'Voucher cancelled and deleted successfully.',
       });
     } catch (err) {
       next(err);
@@ -476,181 +383,11 @@ export function createAccountingRouter(db) {
     }
   });
 
-  // Detailed Ledger Transaction Statement (running ledgers details)
-  router.get('/ledgers/:id/statement', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const { startDate, endDate } = req.query;
-
-      const report = reportService.getLedgerStatement(companyId, req.params.id, startDate, endDate);
-      res.status(200).json({
-        status: 'success',
-        data: report,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // --- ADMIN-ONLY DEBUG ENDPOINTS ---
-  router.get('/debug/voucher/:id', requirePermission('users.manage'), (req, res, next) => {
-    try {
-      const voucher = db.prepare('SELECT * FROM vouchers WHERE id = ?').get(req.params.id);
-      if (!voucher) {
-        return res.status(404).json({ error: { message: 'Voucher not found.' } });
-      }
-      const entries = db
-        .prepare('SELECT * FROM journal_entries WHERE voucher_id = ?')
-        .all(voucher.id);
-      res.status(200).json({
-        status: 'success',
-        data: {
-          ...voucher,
-          entries,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/debug/ledger/:id', requirePermission('users.manage'), (req, res, next) => {
-    try {
-      const ledger = db.prepare('SELECT * FROM ledgers WHERE id = ?').get(req.params.id);
-      if (!ledger) {
-        return res.status(404).json({ error: { message: 'Ledger not found.' } });
-      }
-      const balance = db
-        .prepare('SELECT running_balance FROM ledger_balances WHERE ledger_id = ?')
-        .get(ledger.id);
-      const entries = db
-        .prepare(
-          `
-        SELECT je.*, v.voucher_number, v.voucher_type, v.voucher_date, v.narration as voucher_narration
-        FROM journal_entries je
-        JOIN vouchers v ON je.voucher_id = v.id
-        WHERE je.ledger_id = ?
-        ORDER BY v.voucher_date DESC, je.id DESC
-      `,
-        )
-        .all(ledger.id);
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          ...ledger,
-          runningBalance: balance ? balance.running_balance : 0,
-          entries,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
   // --- SUPPLIER REGISTRY ENDPOINTS ---
-
-  router.get('/suppliers', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const suppliers = supplierService.listSuppliers(req.query);
-      res.status(200).json({ status: 'success', data: suppliers });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post('/suppliers', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const supplier = supplierService.createSupplier(companyId, req.body);
-      res.status(201).json({ status: 'success', data: supplier });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/suppliers/:id', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const supplier = supplierService.getSupplier(req.params.id);
-      res.status(200).json({ status: 'success', data: supplier });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.put('/suppliers/:id', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const supplier = supplierService.updateSupplier(req.params.id, req.body);
-      res.status(200).json({ status: 'success', data: supplier });
-    } catch (err) {
-      next(err);
-    }
-  });
 
   // --- PURCHASING BILL ENDPOINTS ---
 
-  router.get('/purchases/bills', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const bills = purchaseBillService.listPurchaseBills(req.query);
-      res.status(200).json({ status: 'success', data: bills });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post('/purchases/bills', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const payload = { ...req.body, createdBy: req.user.id };
-      const bill = purchaseBillService.createPurchaseBill(companyId, payload);
-      res.status(201).json({ status: 'success', data: bill });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/purchases/bills/:id', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const bill = purchaseBillService.getPurchaseBill(req.params.id);
-      res.status(200).json({ status: 'success', data: bill });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post(
-    '/purchases/bills/:id/cancel',
-    requirePermission('accounting.write'),
-    (req, res, next) => {
-      try {
-        const companyId = 1;
-        const result = purchaseBillService.cancelPurchaseBill(
-          companyId,
-          req.params.id,
-          req.user.id,
-        );
-        res.status(200).json({ status: 'success', data: result });
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
-
   // --- SUPPLIER OUTSTANDING ENDPOINTS ---
-
-  router.get(
-    '/suppliers/:id/outstanding',
-    requirePermission('accounting.read'),
-    (req, res, next) => {
-      try {
-        const companyId = 1;
-        const outstanding = allocationService.getOutstanding('SUPPLIER', companyId, req.params.id);
-        res.status(200).json({ status: 'success', data: outstanding });
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
 
   // --- SUPPLIER PAYMENT ENDPOINTS ---
 
@@ -669,36 +406,6 @@ export function createAccountingRouter(db) {
       const payload = { ...req.body, createdBy: req.user.id };
       const payment = supplierPaymentService.createPayment(companyId, payload);
       res.status(201).json({ status: 'success', data: payment });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.get('/payments/:id', requirePermission('accounting.read'), (req, res, next) => {
-    try {
-      const payment = supplierPaymentService.getPayment(req.params.id);
-      res.status(200).json({ status: 'success', data: payment });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post('/payments/:id/cancel', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      const companyId = 1;
-      const result = supplierPaymentService.cancelPayment(companyId, req.params.id);
-      res.status(200).json({ status: 'success', data: result });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post('/payments/:id/allocate', requirePermission('accounting.write'), (req, res, next) => {
-    try {
-      allocationService.allocateManual('SUPPLIER', req.params.id, req.body.allocations);
-      res
-        .status(200)
-        .json({ status: 'success', message: 'Supplier allocations matched successfully.' });
     } catch (err) {
       next(err);
     }

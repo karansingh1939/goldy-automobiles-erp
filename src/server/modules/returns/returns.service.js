@@ -1,4 +1,5 @@
 import { localDate } from '../../shared/utils/local-date.js';
+import { recordSupplierLedgerEntry } from '../purchasing/supplier-ledger.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { ReturnsRepository } from './returns.repository.js';
@@ -638,6 +639,18 @@ export class ReturnsService {
         narration: `Debit Note for supplier return ${ret.return_number}`,
         created_by: userId,
         entries,
+      });
+
+      // Goods sent back lower what we owe this supplier on the Supplier Ledger.
+      recordSupplierLedgerEntry(this.db, {
+        supplierId: ret.supplier_id,
+        date: ret.return_date,
+        entryType: 'Return',
+        referenceType: 'supplier_returns',
+        referenceId: ret.id,
+        debit: ret.total_refund_amount,
+        notes: `Returned goods ${ret.return_number}`,
+        userId,
       });
 
       return this.repository.updateSupplierReturn(ret.id, {

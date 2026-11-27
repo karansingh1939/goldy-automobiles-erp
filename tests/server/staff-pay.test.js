@@ -76,7 +76,12 @@ test('owner sets salary, gives an advance and pays salary with the advance recov
     );
     assert.equal(summary.advanceDue, 0);
     assert.equal(summary.salaryPaid, true);
-    assert.equal((await call(`/api/v1/staff-pay/${staffId}/history`)).body.data.length, 2);
+    assert.equal(
+      context.db
+        .prepare('SELECT COUNT(*) AS n FROM staff_payments WHERE technician_id = ?')
+        .get(staffId).n,
+      2,
+    );
     assert.equal(
       (await call('/api/v1/accounting/money-accounts')).body.data.find((row) => row.kind === 'CASH')
         .balance,

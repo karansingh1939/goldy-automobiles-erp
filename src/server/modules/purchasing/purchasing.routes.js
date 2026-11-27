@@ -13,15 +13,11 @@ export function createPurchasingRouter(db) {
   router.use(requireAuth);
 
   router.get('/orders', requirePermission('purchases.read'), controller.listOrders);
-  router.get('/orders/:id', requirePermission('purchases.read'), controller.getOrder);
   router.post('/orders', requirePermission('purchases.write'), controller.createOrder);
 
   router.get('/receipts', requirePermission('purchases.read'), controller.listReceipts);
   router.get('/receipts/:id', requirePermission('purchases.read'), controller.getReceipt);
   router.post('/receipts', requirePermission('purchases.write'), controller.createReceipt);
-
-  router.get('/returns/:id', requirePermission('purchases.read'), controller.getReturn);
-  router.post('/returns', requirePermission('purchases.write'), controller.createReturn);
 
   router.get(
     '/suppliers/:supplierId/ledger',

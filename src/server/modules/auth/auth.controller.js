@@ -58,6 +58,7 @@ export class AuthController {
     }
   };
 
+  /** Who is signed in (used to check that a session is still valid). */
   me = (req, res) => {
     res.status(200).json({ user: req.user });
   };

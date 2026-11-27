@@ -235,3 +235,69 @@ test('a paid counter sale can be cancelled and the advance refunded', async () =
     await c.close();
   }
 });
+
+test('wrong money entries can be cancelled from Money In / Out', async () => {
+  const c = await createTestContext();
+  try {
+    const { item } = fixture(c.db);
+    const { DirectBillingService } =
+      await import('../../src/server/modules/accounting/direct-billing.service.js');
+    const { CustomerReceiptService } =
+      await import('../../src/server/modules/accounting/customer-receipt.service.js');
+    const { MoneyService } = await import('../../src/server/modules/accounting/money.service.js');
+    const { StaffPayService } =
+      await import('../../src/server/modules/staff-pay/staff-pay.service.js');
+    const money = new MoneyService(c.db);
+    const cash = money.listAccounts().find((a) => a.kind === 'CASH');
+    const billing = new DirectBillingService(c.db);
+    const customer = billing.walkInCustomerId();
+    const bill = billing.createDirectInvoice({
+      customerId: customer,
+      invoiceDate: localDate(),
+      items: [{ itemId: item, warehouseId: 1, quantity: 1, unitPrice: 100, gstRate: 0 }],
+    });
+    // Counter bill vouchers must be cancelled on their own screen.
+    const sale = money.recentEntries().find((row) => row.cancelWhere === 'Counter Sale');
+    assert.equal(sale, undefined, 'a credit bill does not move cash');
+    const receipt = new CustomerReceiptService(c.db).createReceipt({
+      customerId: customer,
+      receiptDate: localDate(),
+      amount: 100,
+      paymentMode: 'CASH',
+      autoAllocate: true,
+    });
+    const status = () =>
+      c.db.prepare('SELECT status FROM direct_invoices WHERE id = ?').get(bill.invoiceId).status;
+    assert.equal(status(), 'PAID');
+    const entry = money.recentEntries().find((row) => row.id === receipt.voucherId);
+    assert.equal(entry.direction, 'IN');
+    assert.equal(entry.amount, 100);
+    money.cancelEntry(receipt.voucherId, 1);
+    assert.equal(status(), 'UNPAID');
+    assert.equal(money.accountById(cash.id).balance, 0);
+    assert.throws(() => money.cancelEntry(receipt.voucherId, 1), /already cancelled/);
+
+    // Salary paid with an advance cut: the advance cannot be undone first.
+    const staffId = c.db
+      .prepare(
+        "INSERT INTO technicians (technician_code, full_name, phone_number, monthly_salary) VALUES ('T-1', 'Test Mechanic', '9000000777', 1000)",
+      )
+      .run().lastInsertRowid;
+    const pay = new StaffPayService(c.db);
+    const month = localDate().slice(0, 7);
+    pay.giveAdvance(staffId, { amount: 300, accountId: cash.id }, 1);
+    pay.paySalary(staffId, { month, amount: 1000, advanceDeducted: 300, accountId: cash.id }, 1);
+    const [salaryEntry, advanceEntry] = money.recentEntries();
+    assert.throws(() => money.cancelEntry(advanceEntry.id, 1), /Cancel that salary first/);
+    money.cancelEntry(salaryEntry.id, 1);
+    money.cancelEntry(advanceEntry.id, 1);
+    assert.equal(
+      c.db.prepare('SELECT COUNT(*) AS n FROM staff_payments WHERE technician_id = ?').get(staffId)
+        .n,
+      0,
+    );
+    assert.equal(money.accountById(cash.id).balance, 0);
+  } finally {
+    await c.close();
+  }
+});

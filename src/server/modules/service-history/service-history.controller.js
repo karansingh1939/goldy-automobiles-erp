@@ -22,17 +22,4 @@ export class ServiceHistoryController {
       next(error);
     }
   };
-
-  /**
-   * Handles GET /api/v1/customers/:customerId/service-history
-   */
-  getCustomerServiceHistory = (req, res, next) => {
-    try {
-      const customerId = Number(req.params.customerId);
-      const result = this.serviceHistoryService.getCustomerServiceHistory(customerId);
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  };
 }

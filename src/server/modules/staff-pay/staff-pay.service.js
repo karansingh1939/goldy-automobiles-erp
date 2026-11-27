@@ -34,17 +34,6 @@ export class StaffPayService {
       .map((row) => ({ ...row, month, salaryPaid: row.paidThisMonth !== null }));
   }
 
-  history(technicianId) {
-    this.staff(technicianId);
-    return this.db
-      .prepare(
-        `SELECT sp.*, l.name AS paid_from FROM staff_payments sp
-         LEFT JOIN ledgers l ON l.id = sp.payment_ledger_id
-         WHERE sp.technician_id = ? ORDER BY sp.payment_date DESC, sp.id DESC`,
-      )
-      .all(technicianId);
-  }
-
   setMonthlySalary(technicianId, { monthlySalary } = {}, userId = null) {
     const staff = this.staff(technicianId);
     const value = roundMoney(monthlySalary);

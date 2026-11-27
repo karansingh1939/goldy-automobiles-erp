@@ -149,44 +149,6 @@ export class ProfitRepository {
     };
   }
 
-  profitByMonth(filters) {
-    const invoiceFilters = invoiceWhereClause(filters);
-    return this.db
-      .prepare(
-        `
-      ${salesCte}
-      SELECT
-        strftime('%Y-%m', invoices.invoice_date) AS month,
-        COALESCE(SUM(invoices.revenue), 0) AS revenue,
-        COALESCE(SUM(invoices.cost_total), 0) AS cost,
-        COALESCE(SUM(invoices.gross_profit), 0) AS gross_profit
-      FROM sales invoices
-      ${invoiceFilters.clause}
-      GROUP BY strftime('%Y-%m', invoices.invoice_date)
-      ORDER BY month
-    `,
-      )
-      .all(invoiceFilters.params);
-  }
-
-  expensesByMonth(filters) {
-    const expenseFilters = expenseWhereClause(filters);
-    return this.db
-      .prepare(
-        `
-      ${expensesCte}
-      SELECT
-        strftime('%Y-%m', expenses.expense_date) AS month,
-        COALESCE(SUM(expenses.amount), 0) AS expenses
-      FROM expense_totals expenses
-      ${expenseFilters.clause}
-      GROUP BY strftime('%Y-%m', expenses.expense_date)
-      ORDER BY month
-    `,
-      )
-      .all(expenseFilters.params);
-  }
-
   profitByCustomer(filters) {
     const invoiceFilters = invoiceWhereClause(filters);
     return this.db
@@ -204,84 +166,6 @@ export class ProfitRepository {
       ${invoiceFilters.clause}
       GROUP BY customers.id, customers.name
       ORDER BY profit DESC, customer
-    `,
-      )
-      .all(invoiceFilters.params);
-  }
-
-  profitByVehicle(filters) {
-    const invoiceFilters = invoiceWhereClause(filters);
-    return this.db
-      .prepare(
-        `
-      ${salesCte}
-      SELECT
-        vehicles.id AS vehicle_id,
-        vehicles.registration_number AS vehicle,
-        customers.name AS customer,
-        COALESCE(SUM(invoices.revenue), 0) AS revenue,
-        COALESCE(SUM(invoices.cost_total), 0) AS cost,
-        COALESCE(SUM(invoices.gross_profit), 0) AS profit
-      FROM sales invoices
-      LEFT JOIN vehicles ON vehicles.id = invoices.vehicle_id
-      LEFT JOIN customers ON customers.id = invoices.customer_id
-      ${invoiceFilters.clause}
-      GROUP BY vehicles.id, vehicles.registration_number, customers.name
-      ORDER BY profit DESC, vehicle
-    `,
-      )
-      .all(invoiceFilters.params);
-  }
-
-  profitByInventoryItem(filters) {
-    const invoiceFilters = invoiceWhereClause(filters);
-    return this.db
-      .prepare(
-        `
-        WITH ${returnedLinesCte}, item_sales AS (
-        SELECT invoices.invoice_date, invoice_items.inventory_item_id AS item_id,
-          invoice_items.line_revenue AS revenue, invoice_items.line_cost AS cost
-        FROM invoice_items JOIN invoices ON invoices.id = invoice_items.invoice_id
-        WHERE invoices.status = 'FINALIZED' AND invoice_items.item_type IN ('PART', 'LUBRICANT')
-        UNION ALL
-        SELECT direct_invoices.invoice_date, direct_invoice_items.item_id,
-          direct_invoice_items.line_total - direct_invoice_items.gst_amount, direct_invoice_items.line_cost
-        FROM direct_invoice_items JOIN direct_invoices ON direct_invoices.id = direct_invoice_items.direct_invoice_id
-        WHERE direct_invoices.status <> 'CANCELLED' AND direct_invoices.company_id = 1
-        UNION ALL
-        SELECT invoice_date, item_id, -revenue, -cost FROM returned_lines
-      )
-      SELECT inventory_items.id AS item_id, inventory_items.sku, inventory_items.item_name AS item,
-        SUM(invoices.revenue) AS revenue, SUM(invoices.cost) AS cost,
-        SUM(invoices.revenue - invoices.cost) AS profit
-      FROM (SELECT item_sales.*, 'FINALIZED' AS status FROM item_sales) invoices
-      JOIN inventory_items ON inventory_items.id = invoices.item_id
-      ${invoiceFilters.clause}
-      GROUP BY inventory_items.id ORDER BY profit DESC, item
-    `,
-      )
-      .all(invoiceFilters.params);
-  }
-
-  profitByMechanic(filters) {
-    const invoiceFilters = invoiceWhereClause(filters);
-    return this.db
-      .prepare(
-        `
-      ${salesCte}
-      SELECT
-        COALESCE(technicians.id, users.id) AS mechanic_id,
-        COALESCE(technicians.full_name, users.name, 'Unassigned') AS mechanic,
-        COALESCE(SUM(invoices.revenue), 0) AS revenue,
-        COALESCE(SUM(invoices.cost_total), 0) AS cost,
-        COALESCE(SUM(invoices.gross_profit), 0) AS profit
-      FROM sales invoices
-      LEFT JOIN job_cards ON job_cards.id = invoices.job_card_id
-      LEFT JOIN users ON users.id = job_cards.assigned_to
-      LEFT JOIN technicians ON technicians.id = job_cards.technician_id
-      ${invoiceFilters.clause}
-      GROUP BY COALESCE(technicians.id, users.id), COALESCE(technicians.full_name, users.name)
-      ORDER BY profit DESC, mechanic
     `,
       )
       .all(invoiceFilters.params);
