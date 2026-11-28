@@ -1,12 +1,18 @@
 import { AppError } from '../../shared/errors/app-error.js';
 
-/**
- * Service to generate unique, sequential voucher numbers for specific companies, voucher types, and dates.
- */
+const PREFIXES = {
+  Sales: 'SAL',
+  Purchase: 'PUR',
+  Receipt: 'REC',
+  Payment: 'PAY',
+  Contra: 'CON',
+  Journal: 'JRN',
+  'Debit Note': 'DBN',
+  'Credit Note': 'CRN',
+};
+
+/** Voucher numbers per type and calendar year: SAL-2026-000001. */
 export class VoucherNumberService {
-  /**
-   * @param {object} db - Database connection instance
-   */
   constructor(db) {
     this.db = db;
   }
@@ -38,60 +44,16 @@ export class VoucherNumberService {
       throw new AppError('Date is required to generate sequence.', 400, 'SEQUENCING_INVALID_DATE');
     }
 
-    const prefix = this.getPrefixForType(voucherType);
-    const year = date.split('-')[0];
-    const matchPattern = `${prefix}-${year}-%`;
-
-    // Query utilizing compound DESC index for sub-millisecond retrieval
+    const prefix = PREFIXES[voucherType] || 'VCH';
+    const start = `${prefix}-${date.slice(0, 4)}-`;
     const row = this.db
       .prepare(
-        `
-      SELECT voucher_number FROM vouchers 
-      WHERE company_id = ? AND voucher_type = ? AND voucher_number LIKE ? 
-      ORDER BY voucher_number DESC LIMIT 1
-    `,
+        `SELECT voucher_number FROM vouchers
+         WHERE company_id = ? AND voucher_type = ? AND voucher_number LIKE ?
+         ORDER BY voucher_number DESC LIMIT 1`,
       )
-      .get(companyId, voucherType, matchPattern);
-
-    let nextSeq = 1;
-    if (row && row.voucher_number) {
-      const parts = row.voucher_number.split('-');
-      const lastSeqStr = parts[parts.length - 1];
-      const lastSeq = parseInt(lastSeqStr, 10);
-      if (!Number.isNaN(lastSeq)) {
-        nextSeq = lastSeq + 1;
-      }
-    }
-
-    return `${prefix}-${year}-${String(nextSeq).padStart(6, '0')}`;
-  }
-
-  /**
-   * Translates voucher types to code prefixes.
-   *
-   * @param {string} voucherType - Type string
-   * @returns {string} prefix code
-   */
-  getPrefixForType(voucherType) {
-    switch (voucherType) {
-      case 'Sales':
-        return 'SAL';
-      case 'Purchase':
-        return 'PUR';
-      case 'Receipt':
-        return 'REC';
-      case 'Payment':
-        return 'PAY';
-      case 'Contra':
-        return 'CON';
-      case 'Journal':
-        return 'JRN';
-      case 'Debit Note':
-        return 'DBN';
-      case 'Credit Note':
-        return 'CRN';
-      default:
-        return 'VCH';
-    }
+      .get(companyId, voucherType, `${start}%`);
+    const last = Number.parseInt(row?.voucher_number?.split('-').pop(), 10);
+    return `${start}${String((Number.isNaN(last) ? 0 : last) + 1).padStart(6, '0')}`;
   }
 }

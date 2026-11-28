@@ -2,92 +2,14 @@ import { GstRepository } from './gst.repository.js';
 import { roundMoney } from '../../shared/utils/numbers.js';
 import { parseReportPeriod } from '../../shared/utils/report-period.js';
 
-function mapSummaryRow(row) {
-  return {
-    invoiceCount: row.invoice_count,
-    creditNoteCount: row.credit_note_count || 0,
-    lineCount: row.line_count,
-    taxableValue: roundMoney(row.taxable_value),
-    cgstAmount: roundMoney(row.cgst_amount),
-    sgstAmount: roundMoney(row.sgst_amount),
-    igstAmount: roundMoney(row.igst_amount),
-    totalTax: roundMoney(row.total_tax),
-    grossValue: roundMoney(row.gross_value),
-  };
-}
+const camel = (key) => key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 
-function mapGstr1Row(row) {
-  return {
-    documentType: row.document_type || 'INVOICE',
-    originalInvoiceNumber: row.original_invoice_number || null,
-    invoiceId: row.invoice_id,
-    invoiceNumber: row.invoice_number,
-    invoiceDate: row.invoice_date,
-    status: row.status,
-    customerId: row.customer_id,
-    customerName: row.customer_name,
-    customerGstin: row.customer_gstin,
-    placeOfSupply: row.place_of_supply,
-    lineId: row.line_id,
-    itemType: row.item_type,
-    hsnSac: row.hsn_sac,
-    description: row.description,
-    quantity: roundMoney(row.quantity),
-    unitPrice: roundMoney(row.unit_price),
-    taxableValue: roundMoney(row.taxable_value),
-    gstRate: roundMoney(row.gst_rate),
-    cgstAmount: roundMoney(row.cgst_amount),
-    sgstAmount: roundMoney(row.sgst_amount),
-    igstAmount: roundMoney(row.igst_amount),
-    totalTax: roundMoney(row.total_tax),
-    lineTotal: roundMoney(row.line_total),
-  };
-}
-
-function mapGstr3bDataset(dataset) {
-  const outward = dataset.outward_supplies;
-  const itc = dataset.eligible_itc;
-
-  return {
-    outwardSupplies: {
-      invoiceCount: outward.invoice_count,
-      taxableValue: roundMoney(outward.taxable_value),
-      integratedTax: roundMoney(outward.integrated_tax),
-      centralTax: roundMoney(outward.central_tax),
-      stateUtTax: roundMoney(outward.state_ut_tax),
-      cess: roundMoney(outward.cess),
-      totalTax: roundMoney(outward.total_tax),
-    },
-    eligibleItc: {
-      billCount: itc.bill_count,
-      taxableValue: roundMoney(itc.taxable_value),
-      integratedTax: roundMoney(itc.integrated_tax),
-      centralTax: roundMoney(itc.central_tax),
-      stateUtTax: roundMoney(itc.state_ut_tax),
-      cess: roundMoney(itc.cess),
-      totalTax: roundMoney(itc.total_tax),
-    },
-    rateBreakdown: dataset.rate_breakdown.map((row) => ({
-      gstRate: roundMoney(row.gst_rate),
-      taxableValue: roundMoney(row.taxable_value),
-      cgstAmount: roundMoney(row.cgst_amount),
-      sgstAmount: roundMoney(row.sgst_amount),
-      igstAmount: roundMoney(row.igst_amount),
-      totalTax: roundMoney(row.total_tax),
-    })),
-  };
-}
-
-function mapHsnRow(row) {
-  return {
-    hsnSac: row.hsn_sac,
-    quantity: roundMoney(row.quantity),
-    taxableValue: roundMoney(row.taxable_value),
-    cgstAmount: roundMoney(row.cgst_amount),
-    sgstAmount: roundMoney(row.sgst_amount),
-    igstAmount: roundMoney(row.igst_amount),
-    totalTax: roundMoney(row.total_tax),
-  };
+/** The same data with camelCase names and every number rounded to paise. */
+function present(value) {
+  if (Array.isArray(value)) return value.map(present);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => [camel(key), present(v)]));
+  return typeof value === 'number' ? roundMoney(value) : value;
 }
 
 export class GstService {
@@ -101,7 +23,7 @@ export class GstService {
 
     return {
       filters,
-      data: mapSummaryRow(this.repository.summary(filters)),
+      data: present(this.repository.summary(filters)),
     };
   }
 
@@ -110,7 +32,9 @@ export class GstService {
 
     return {
       filters,
-      data: this.repository.gstr1Dataset(filters).map(mapGstr1Row),
+      data: this.repository
+        .gstr1Dataset(filters)
+        .map((row) => ({ originalInvoiceNumber: null, ...present(row) })),
     };
   }
 
@@ -119,7 +43,7 @@ export class GstService {
 
     return {
       filters,
-      data: mapGstr3bDataset(this.repository.gstr3bDataset(filters)),
+      data: present(this.repository.gstr3bDataset(filters)),
     };
   }
 
@@ -128,7 +52,7 @@ export class GstService {
 
     return {
       filters,
-      data: this.repository.hsnSummary(filters).map(mapHsnRow),
+      data: present(this.repository.hsnSummary(filters)),
     };
   }
 }

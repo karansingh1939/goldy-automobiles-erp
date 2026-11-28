@@ -5,25 +5,13 @@ import { AppError } from '../../shared/errors/app-error.js';
  * Caches resolved keys in memory to minimize SQL query overhead during batch postings.
  */
 export class LedgerResolverService {
-  /**
-   * @param {object} db - Database connection instance
-   */
   constructor(db) {
     this.db = db;
     this.cache = new Map(); // Key format: "companyId:systemKey" -> ledgerObject
   }
 
-  /**
-   * Resolves the ledger ID for a given company and system key.
-   * Uses cached results or queries and caches the lookup on cache miss (lazy loading).
-   *
-   * @param {number} companyId - Active company ID
-   * @param {string} systemKey - Permanent immutable ledger identifier
-   * @returns {number} Ledger ID
-   */
   getLedgerId(companyId, systemKey) {
-    const ledger = this.getSystemLedger(companyId, systemKey);
-    return ledger.id;
+    return this.getSystemLedger(companyId, systemKey).id;
   }
 
   /**

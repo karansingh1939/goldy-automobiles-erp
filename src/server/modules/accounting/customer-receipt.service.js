@@ -2,6 +2,9 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { AccountingPostingEngine } from './posting-engine.service.js';
 import { AllocationService } from './allocation.service.js';
 import { roundMoney } from '../../shared/utils/numbers.js';
+import { isIsoDate } from '../../shared/utils/validation.js';
+import { nextYearlyNumber } from '../../shared/utils/document-number.js';
+import { receivingLedgerId } from './ledgers.js';
 
 /**
  * Service to handle customer payments, deposits, advances, and cancellations.
@@ -48,7 +51,7 @@ export class CustomerReceiptService {
       );
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(receiptDate)) {
+    if (!isIsoDate(receiptDate)) {
       throw new AppError('Receipt date must be YYYY-MM-DD.', 400, 'RECEIPT_INVALID_DATE');
     }
 
@@ -64,50 +67,17 @@ export class CustomerReceiptService {
       throw new AppError('Customer not found.', 404, 'CUSTOMER_NOT_FOUND');
     }
 
-    let customerLedgerId = customer.ledger_id;
-    if (!customerLedgerId) {
-      // Lazy resolve/create customer ledger if missing
-      customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(companyId, customerId);
-    }
+    const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(companyId, customerId);
 
-    // Resolve cash or selected bank ledger
-    let receivingLedgerId;
-    if (paymentMode === 'CASH') {
-      receivingLedgerId = this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cash_in_hand');
-    } else {
-      if (!bankLedgerId) {
-        throw new AppError(
-          'Bank ledger ID is required when payment mode is BANK.',
-          400,
-          'BANK_LEDGER_REQUIRED',
-        );
-      }
-      const bank = this.db
-        .prepare('SELECT id FROM ledgers WHERE id = ? AND company_id = ?')
-        .get(bankLedgerId, companyId);
-      if (!bank) {
-        throw new AppError('Selected Bank ledger not found.', 404, 'BANK_LEDGER_NOT_FOUND');
-      }
-      receivingLedgerId = bankLedgerId;
-    }
+    const cashOrBankId = receivingLedgerId(this.db, { paymentMode, bankLedgerId, companyId });
 
     return this.db.transaction(() => {
-      // 2. Generate sequential receipt document number
-      const year = new Date(receiptDate).getFullYear();
-      const prefix = `REC-${year}-`;
-      const last = this.db
-        .prepare(
-          'SELECT receipt_number FROM customer_receipts WHERE receipt_number LIKE ? ORDER BY receipt_number DESC LIMIT 1',
-        )
-        .get(`${prefix}%`);
-      let seq = 1;
-      if (last) {
-        const match = last.receipt_number.match(/(\d+)$/);
-        if (match) {
-          seq = parseInt(match[1], 10) + 1;
-        }
-      }
-      const receiptNumber = `${prefix}${String(seq).padStart(6, '0')}`;
+      const receiptNumber = nextYearlyNumber(this.db, {
+        table: 'customer_receipts',
+        column: 'receipt_number',
+        prefix: 'REC',
+        date: receiptDate,
+      });
 
       // 3. Post Receipt Voucher
       const voucherResult = this.postingEngine.post({
@@ -117,7 +87,7 @@ export class CustomerReceiptService {
         narration: narration || `Receipt ${receiptNumber} from ${customer.name}`,
         created_by: createdBy,
         entries: [
-          { ledgerId: receivingLedgerId, type: 'DEBIT', amount: receiptAmount },
+          { ledgerId: cashOrBankId, type: 'DEBIT', amount: receiptAmount },
           { ledgerId: customerLedgerId, type: 'CREDIT', amount: receiptAmount },
         ],
       });
@@ -155,7 +125,13 @@ export class CustomerReceiptService {
       if (Array.isArray(allocations) && allocations.length) {
         this.allocationService.allocateManualTransaction('CUSTOMER', receiptId, allocations);
       } else if (autoAllocate) {
-        this.allocationService.allocateReceiptFIFO(receiptId, companyId, customerId, receiptAmount);
+        this.allocationService.allocateFIFO(
+          'CUSTOMER',
+          receiptId,
+          companyId,
+          customerId,
+          receiptAmount,
+        );
       }
 
       return {
@@ -185,7 +161,7 @@ export class CustomerReceiptService {
       }
 
       // 1. Reverse allocations
-      this.allocationService.cancelReceiptAllocations(receiptId);
+      this.allocationService.cancelAllocations('CUSTOMER', receiptId);
 
       // 2. Reverse accounting entries by cancelling/deleting voucher
       if (receipt.voucher_id) {

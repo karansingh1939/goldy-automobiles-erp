@@ -55,3 +55,18 @@ export function nextDocumentNumber(db, series, businessDate) {
   }
   return number;
 }
+
+/**
+ * Next number in a simple yearly series such as REC-2026-000001 (receipts
+ * and supplier payments, which are not GST documents).
+ */
+export function nextYearlyNumber(db, { table, column, prefix, date }) {
+  const start = `${prefix}-${String(date).slice(0, 4)}-`;
+  const last = db
+    .prepare(
+      `SELECT ${column} AS number FROM ${table} WHERE ${column} LIKE ? ORDER BY ${column} DESC LIMIT 1`,
+    )
+    .get(`${start}%`);
+  const sequence = Number(/(\d+)$/.exec(last?.number ?? '')?.[1] ?? 0) + 1;
+  return `${start}${String(sequence).padStart(6, '0')}`;
+}

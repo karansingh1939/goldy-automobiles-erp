@@ -1,3 +1,35 @@
+const JOB_CARD_FROM = `FROM job_cards
+  JOIN customers ON customers.id = job_cards.customer_id
+  JOIN vehicles ON vehicles.id = job_cards.vehicle_id`;
+
+// Fields a job card search can match exactly, in the order they are tried.
+const SEARCH_FIELDS = {
+  job_card_number: {
+    label: 'Job Card Number',
+    column: 'job_cards.job_card_number',
+    exact: 'job_cards.job_card_number = ? COLLATE NOCASE',
+  },
+  registration_number: {
+    label: 'Registration Number',
+    column: 'vehicles.registration_number',
+    exact: 'vehicles.registration_number = ? COLLATE NOCASE',
+  },
+  phone: { label: 'Phone Number', column: 'customers.phone', exact: 'customers.phone = ?' },
+  name: {
+    label: 'Customer Name',
+    column: 'customers.name',
+    exact: 'customers.name = ? COLLATE NOCASE',
+  },
+};
+const PARTIAL_COLUMNS = [
+  'job_cards.job_card_number',
+  'customers.name',
+  'customers.phone',
+  'vehicles.registration_number',
+  'vehicles.engine_number',
+  'vehicles.chassis_number',
+];
+
 export class JobCardRepository {
   constructor(db) {
     this.db = db;
@@ -36,229 +68,96 @@ export class JobCardRepository {
     return this.db.prepare('SELECT * FROM inventory_batches WHERE id = ?').get(id);
   }
 
+  /**
+   * Job cards for the list, newest first. A search first looks for an exact
+   * job card number, car number, phone or customer name (the kind it looks
+   * like first); with no exact match it searches parts of those fields.
+   */
   listJobCards({ search, status, fromDate, toDate, exactMatchOnly, pageSize, offset }) {
-    const params = [];
     const conditions = [];
-
+    const params = [];
     if (status) {
       conditions.push('job_cards.status = ?');
       params.push(status);
     }
-
     if (fromDate) {
       conditions.push("DATE(job_cards.opened_at, 'localtime') >= DATE(?)");
       params.push(fromDate);
     }
-
     if (toDate) {
       conditions.push("DATE(job_cards.opened_at, 'localtime') <= DATE(?)");
       params.push(toDate);
     }
 
-    let searchMode = 'none';
     let matchType = '';
     let matchValue = '';
-    let searchCondition = '';
-    const searchParams = [];
-    const orderByParams = [];
     let orderBy = 'job_cards.opened_at DESC, job_cards.id DESC';
-
-    if (search) {
-      const query = search.trim();
-
-      // Smart format detection
-      let detectedType = 'name';
-      if (/^\d+$/.test(query)) {
-        detectedType = 'phone';
-      } else if (/^JC-\d+/i.test(query)) {
-        detectedType = 'job_card_number';
-      } else if (
-        /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/i.test(query) ||
-        (/^[A-Z0-9\s-]+$/i.test(query) && /[A-Z]/i.test(query) && /\d/.test(query))
-      ) {
-        detectedType = 'registration_number';
-      }
-
-      // Check order based on detectedType
-      const checks = [];
-      if (detectedType === 'job_card_number') {
-        checks.push('job_card_number', 'registration_number', 'phone', 'name');
-      } else if (detectedType === 'registration_number') {
-        checks.push('registration_number', 'job_card_number', 'phone', 'name');
-      } else if (detectedType === 'phone') {
-        checks.push('phone', 'job_card_number', 'registration_number', 'name');
+    const orderParams = [];
+    const query = search?.trim();
+    if (query) {
+      const looksLike = /^\d+$/.test(query)
+        ? 'phone'
+        : /^JC[-/]\d/i.test(query)
+          ? 'job_card_number'
+          : /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/i.test(query) ||
+              (/^[A-Z0-9\s-]+$/i.test(query) && /[A-Z]/i.test(query) && /\d/.test(query))
+            ? 'registration_number'
+            : 'name';
+      const order = [looksLike, ...Object.keys(SEARCH_FIELDS).filter((key) => key !== looksLike)];
+      const exact = order.find(
+        (key) =>
+          this.db
+            .prepare(`SELECT 1 ${JOB_CARD_FROM} WHERE ${SEARCH_FIELDS[key].exact} LIMIT 1`)
+            .get(query) !== undefined,
+      );
+      if (exact) {
+        matchType = SEARCH_FIELDS[exact].label;
+        matchValue = query;
+        conditions.push(SEARCH_FIELDS[exact].exact);
+        params.push(query);
+      } else if (exactMatchOnly) {
+        return { data: [], total: 0, unfilteredTotal: this.countAll(), matchType, matchValue };
       } else {
-        checks.push('name', 'job_card_number', 'registration_number', 'phone');
-      }
-
-      for (const type of checks) {
-        if (type === 'job_card_number') {
-          const count = this.db
-            .prepare(
-              `
-            SELECT COUNT(*) AS count FROM job_cards
-            JOIN customers ON customers.id = job_cards.customer_id
-            JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-            WHERE job_cards.job_card_number = ? COLLATE NOCASE
-          `,
-            )
-            .get(query).count;
-          if (count > 0) {
-            searchMode = 'exact';
-            matchType = 'Job Card Number';
-            matchValue = query;
-            searchCondition = 'job_cards.job_card_number = ? COLLATE NOCASE';
-            searchParams.push(query);
-            break;
-          }
-        } else if (type === 'registration_number') {
-          const count = this.db
-            .prepare(
-              `
-            SELECT COUNT(*) AS count FROM job_cards
-            JOIN customers ON customers.id = job_cards.customer_id
-            JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-            WHERE vehicles.registration_number = ? COLLATE NOCASE
-          `,
-            )
-            .get(query).count;
-          if (count > 0) {
-            searchMode = 'exact';
-            matchType = 'Registration Number';
-            matchValue = query;
-            searchCondition = 'vehicles.registration_number = ? COLLATE NOCASE';
-            searchParams.push(query);
-            break;
-          }
-        } else if (type === 'phone') {
-          const count = this.db
-            .prepare(
-              `
-            SELECT COUNT(*) AS count FROM job_cards
-            JOIN customers ON customers.id = job_cards.customer_id
-            JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-            WHERE customers.phone = ?
-          `,
-            )
-            .get(query).count;
-          if (count > 0) {
-            searchMode = 'exact';
-            matchType = 'Phone Number';
-            matchValue = query;
-            searchCondition = 'customers.phone = ?';
-            searchParams.push(query);
-            break;
-          }
-        } else if (type === 'name') {
-          const count = this.db
-            .prepare(
-              `
-            SELECT COUNT(*) AS count FROM job_cards
-            JOIN customers ON customers.id = job_cards.customer_id
-            JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-            WHERE customers.name = ? COLLATE NOCASE
-          `,
-            )
-            .get(query).count;
-          if (count > 0) {
-            searchMode = 'exact';
-            matchType = 'Customer Name';
-            matchValue = query;
-            searchCondition = 'customers.name = ? COLLATE NOCASE';
-            searchParams.push(query);
-            break;
-          }
-        }
-      }
-
-      if (searchMode === 'none') {
-        if (exactMatchOnly) {
-          return {
-            data: [],
-            total: 0,
-            unfilteredTotal: this.db.prepare('SELECT COUNT(*) AS count FROM job_cards').get().count,
-            matchType: '',
-            matchValue: '',
-          };
-        } else {
-          searchMode = 'partial';
-          searchCondition = `(job_cards.job_card_number LIKE ? COLLATE NOCASE
-            OR customers.name LIKE ? COLLATE NOCASE
-            OR customers.phone LIKE ? COLLATE NOCASE
-            OR vehicles.registration_number LIKE ? COLLATE NOCASE
-            OR vehicles.engine_number LIKE ? COLLATE NOCASE
-            OR vehicles.chassis_number LIKE ? COLLATE NOCASE)`;
-
-          const wildcard = `%${query}%`;
-          searchParams.push(wildcard, wildcard, wildcard, wildcard, wildcard, wildcard);
-
-          if (detectedType === 'phone') {
-            orderBy = `CASE WHEN customers.phone LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, job_cards.opened_at DESC, job_cards.id DESC`;
-            orderByParams.push(wildcard);
-          } else if (detectedType === 'job_card_number') {
-            orderBy = `CASE WHEN job_cards.job_card_number LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, job_cards.opened_at DESC, job_cards.id DESC`;
-            orderByParams.push(wildcard);
-          } else if (detectedType === 'registration_number') {
-            orderBy = `CASE WHEN vehicles.registration_number LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, job_cards.opened_at DESC, job_cards.id DESC`;
-            orderByParams.push(wildcard);
-          } else {
-            orderBy = `CASE WHEN customers.name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, job_cards.opened_at DESC, job_cards.id DESC`;
-            orderByParams.push(wildcard);
-          }
-        }
+        const like = `%${query}%`;
+        conditions.push(
+          `(${PARTIAL_COLUMNS.map((c) => `${c} LIKE ? COLLATE NOCASE`).join(' OR ')})`,
+        );
+        params.push(...PARTIAL_COLUMNS.map(() => like));
+        // Rows matching the kind of value typed come first.
+        orderBy = `CASE WHEN ${SEARCH_FIELDS[looksLike].column} LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, ${orderBy}`;
+        orderParams.push(like);
       }
     }
 
-    const finalConditions = [...conditions];
-    if (searchCondition) {
-      finalConditions.push(searchCondition);
-    }
-    const where = finalConditions.length > 0 ? `WHERE ${finalConditions.join(' AND ')}` : '';
-
-    const baseParams = conditions.length > 0 ? params.slice(0, conditions.length) : [];
-    const dataParams = [...baseParams, ...searchParams, ...orderByParams];
-    const totalParams = [...baseParams, ...searchParams];
-
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const data = this.db
       .prepare(
-        `
-      SELECT
-        job_cards.*,
-        customers.name AS customer_name,
-        customers.phone AS customer_phone,
-        vehicles.registration_number,
-        vehicles.engine_number,
-        vehicles.chassis_number,
-        COALESCE(technicians.full_name, users.name) AS assigned_mechanic_name,
-        (SELECT invoice_number FROM invoices
-          WHERE invoices.job_card_id = job_cards.id ORDER BY invoices.id DESC LIMIT 1) AS invoice_number
-      FROM job_cards
-      JOIN customers ON customers.id = job_cards.customer_id
-      JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-      LEFT JOIN users ON users.id = job_cards.assigned_to
-      LEFT JOIN technicians ON technicians.id = job_cards.technician_id
-      ${where}
-      ORDER BY ${orderBy}
-      LIMIT ? OFFSET ?
-    `,
+        `SELECT
+           job_cards.*,
+           customers.name AS customer_name,
+           customers.phone AS customer_phone,
+           vehicles.registration_number,
+           vehicles.engine_number,
+           vehicles.chassis_number,
+           COALESCE(technicians.full_name, users.name) AS assigned_mechanic_name,
+           (SELECT invoice_number FROM invoices
+             WHERE invoices.job_card_id = job_cards.id ORDER BY invoices.id DESC LIMIT 1) AS invoice_number
+         ${JOB_CARD_FROM}
+         LEFT JOIN users ON users.id = job_cards.assigned_to
+         LEFT JOIN technicians ON technicians.id = job_cards.technician_id
+         ${where}
+         ORDER BY ${orderBy}
+         LIMIT ? OFFSET ?`,
       )
-      .all(...dataParams, pageSize, offset);
-
+      .all(...params, ...orderParams, pageSize, offset);
     const total = this.db
-      .prepare(
-        `
-      SELECT COUNT(*) AS count
-      FROM job_cards
-      JOIN customers ON customers.id = job_cards.customer_id
-      JOIN vehicles ON vehicles.id = job_cards.vehicle_id
-      ${where}
-    `,
-      )
-      .get(...totalParams).count;
+      .prepare(`SELECT COUNT(*) AS count ${JOB_CARD_FROM} ${where}`)
+      .get(...params).count;
+    return { data, total, unfilteredTotal: this.countAll(), matchType, matchValue };
+  }
 
-    const unfilteredTotal = this.db.prepare('SELECT COUNT(*) AS count FROM job_cards').get().count;
-
-    return { data, total, unfilteredTotal, matchType, matchValue };
+  countAll() {
+    return this.db.prepare('SELECT COUNT(*) AS count FROM job_cards').get().count;
   }
 
   findJobCardById(id) {

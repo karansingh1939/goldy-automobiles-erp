@@ -7,13 +7,15 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { verifyBackupSnapshot } from './snapshot-verification.js';
 import { acquireBackupLock } from '../../database/backup-lock.js';
 
+const yesNo = (value) => ([true, 'true', 1, '1'].includes(value) ? 'true' : 'false');
+
 export class BackupService {
   constructor(db) {
     this.db = db;
     this.repository = new BackupRepository(db);
   }
 
-  async backupDatabase({ type, customPath, userId, allowDuringRestore = false } = {}) {
+  async backupDatabase({ type, userId, allowDuringRestore = false } = {}) {
     if (!type) {
       throw new AppError('Backup type is required', 400, 'BACKUP_TYPE_REQUIRED');
     }
@@ -30,25 +32,7 @@ export class BackupService {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${dbBase}_backup_${type}_${timestamp}_${randomUUID()}${dbExt}`;
 
-    let targetPath;
-    if (customPath) {
-      const resolvedCustom = path.resolve(customPath);
-      let isDir = false;
-      try {
-        if (fs.existsSync(resolvedCustom)) {
-          isDir = fs.statSync(resolvedCustom).isDirectory();
-        } else {
-          isDir =
-            !path.extname(resolvedCustom) || customPath.endsWith('/') || customPath.endsWith('\\');
-        }
-      } catch (err) {
-        isDir = false;
-      }
-      targetPath = isDir ? path.join(resolvedCustom, filename) : resolvedCustom;
-    } else {
-      targetPath = path.join(getBackupDirectory(dbPath), filename);
-    }
-
+    const targetPath = path.join(getBackupDirectory(dbPath), filename);
     const targetDir = path.dirname(targetPath);
 
     if (path.resolve(targetPath) === path.resolve(dbPath)) {
@@ -91,18 +75,8 @@ export class BackupService {
     }
 
     try {
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      if (typeof this.db.backup === 'function') {
-        // 1. Prefer: db.backup(filepath)
-        await this.db.backup(targetPath);
-      } else {
-        // 2. Fallback: VACUUM INTO 'filepath'
-        const escapedPath = targetPath.replace(/'/g, "''");
-        this.db.prepare(`VACUUM INTO '${escapedPath}'`).run();
-      }
+      fs.mkdirSync(targetDir, { recursive: true });
+      await this.db.backup(targetPath);
 
       if (!fs.existsSync(targetPath)) {
         throw new Error('Backup file was not created');
@@ -125,7 +99,7 @@ export class BackupService {
         }
       }
 
-      if (!customPath && type !== 'PRE_MIGRATION') {
+      if (type !== 'PRE_MIGRATION') {
         logRecord.external = await this.copyToExternalDestination(targetPath);
       }
       return logRecord;
@@ -283,25 +257,11 @@ export class BackupService {
       cleanSettings['backup.external_directory'] = trimmed ? path.resolve(trimmed) : '';
     }
 
-    if (settings['backup.auto_enabled'] !== undefined) {
-      cleanSettings['backup.auto_enabled'] =
-        settings['backup.auto_enabled'] === true ||
-        settings['backup.auto_enabled'] === 'true' ||
-        settings['backup.auto_enabled'] === 1 ||
-        settings['backup.auto_enabled'] === '1'
-          ? 'true'
-          : 'false';
-    }
+    if (settings['backup.auto_enabled'] !== undefined)
+      cleanSettings['backup.auto_enabled'] = yesNo(settings['backup.auto_enabled']);
 
-    if (settings['backup.missed_recovery'] !== undefined) {
-      cleanSettings['backup.missed_recovery'] =
-        settings['backup.missed_recovery'] === true ||
-        settings['backup.missed_recovery'] === 'true' ||
-        settings['backup.missed_recovery'] === 1 ||
-        settings['backup.missed_recovery'] === '1'
-          ? 'true'
-          : 'false';
-    }
+    if (settings['backup.missed_recovery'] !== undefined)
+      cleanSettings['backup.missed_recovery'] = yesNo(settings['backup.missed_recovery']);
 
     if (settings['backup.retention_count'] !== undefined) {
       const count = Number(settings['backup.retention_count']);

@@ -1,327 +1,221 @@
 import { roundMoney } from '../../shared/utils/numbers.js';
+
+// Payments and bills whose stored amounts must equal the sum of their
+// allocation rows. "unallocated" payments: amount - allocated = unallocated;
+// "paid" bills: allocated = amount_paid.
+const ALLOCATION_CHECKS = [
+  {
+    type: 'customer_receipt',
+    table: 'customer_receipts',
+    number: 'receipt_number',
+    where: "company_id = @companyId AND status = 'ACTIVE'",
+    sums: 'SELECT customer_receipt_id AS id, SUM(allocated_amount) AS total FROM receipt_allocations GROUP BY customer_receipt_id',
+    kind: 'unallocated',
+  },
+  {
+    type: 'direct_invoice',
+    table: 'direct_invoices',
+    number: 'invoice_number',
+    where: "company_id = @companyId AND status <> 'CANCELLED'",
+    sums: "SELECT document_id AS id, SUM(allocated_amount) AS total FROM receipt_allocations WHERE document_type = 'direct_invoice' GROUP BY document_id",
+    kind: 'paid',
+    label: 'Document paid',
+  },
+  {
+    type: 'job_card_invoice',
+    table: 'invoices',
+    number: 'invoice_number',
+    where: "status = 'FINALIZED'",
+    sums: "SELECT document_id AS id, SUM(allocated_amount) AS total FROM receipt_allocations WHERE document_type = 'job_card_invoice' GROUP BY document_id",
+    kind: 'paid',
+    label: 'Invoice paid',
+  },
+  {
+    type: 'supplier_payment',
+    table: 'supplier_payments',
+    number: 'payment_number',
+    where: "company_id = @companyId AND status = 'ACTIVE'",
+    sums: 'SELECT supplier_payment_id AS id, SUM(allocated_amount) AS total FROM supplier_allocations GROUP BY supplier_payment_id',
+    kind: 'unallocated',
+  },
+  {
+    type: 'purchase_bill',
+    table: 'purchase_bills',
+    number: 'bill_number',
+    where: "company_id = @companyId AND status <> 'CANCELLED'",
+    sums: "SELECT document_id AS id, SUM(allocated_amount) AS total FROM supplier_allocations WHERE document_type = 'purchase_bill' GROUP BY document_id",
+    kind: 'paid',
+    label: 'Document paid',
+  },
+];
+
+const check = (discrepancies) => ({ passed: discrepancies.length === 0, discrepancies });
+
 /**
- * Service to execute system-wide data integrity and accounting checks.
- * Detects discrepancies between document statuses, ledger balances, and allocation audit trails.
+ * Integrity check of the books: cached ledger balances, payment matching,
+ * stock totals, return quantities and the trial balance. Each check is one
+ * query over all rows.
  */
 export class ReconciliationService {
   constructor(db) {
     this.db = db;
   }
 
-  /**
-   * Run all reconciliation checks.
-   * @returns {object} Audit report listing any discrepancies
-   */
   runReconciliation(companyId = 1) {
-    const ledgerDiscrepancies = this.checkLedgerBalances(companyId);
-    const allocationDiscrepancies = this.checkAllocationIntegrity(companyId);
-    const tbBalanced = this.checkTrialBalanceBalanced(companyId);
-
-    const inventoryDiscrepancies = this.checkInventoryStockIntegrity();
-    const returnDiscrepancies = this.checkReturnLimitsIntegrity(companyId);
-
-    const isHealthy =
-      ledgerDiscrepancies.length === 0 &&
-      allocationDiscrepancies.length === 0 &&
-      tbBalanced.isBalanced &&
-      inventoryDiscrepancies.length === 0 &&
-      returnDiscrepancies.length === 0;
-
+    const checks = {
+      ledgers: check(this.checkLedgerBalances(companyId)),
+      allocations: check(this.checkAllocationIntegrity(companyId)),
+      inventory: check(this.checkInventoryStockIntegrity()),
+      returns: check(this.checkReturnLimitsIntegrity(companyId)),
+      trialBalance: this.checkTrialBalanceBalanced(companyId),
+    };
     return {
       timestamp: new Date().toISOString(),
       companyId,
-      isHealthy,
-      checks: {
-        ledgers: {
-          passed: ledgerDiscrepancies.length === 0,
-          discrepancies: ledgerDiscrepancies,
-        },
-        allocations: {
-          passed: allocationDiscrepancies.length === 0,
-          discrepancies: allocationDiscrepancies,
-        },
-        inventory: {
-          passed: inventoryDiscrepancies.length === 0,
-          discrepancies: inventoryDiscrepancies,
-        },
-        returns: {
-          passed: returnDiscrepancies.length === 0,
-          discrepancies: returnDiscrepancies,
-        },
-        trialBalance: tbBalanced,
-      },
+      isHealthy:
+        checks.ledgers.passed &&
+        checks.allocations.passed &&
+        checks.trialBalance.isBalanced &&
+        checks.inventory.passed &&
+        checks.returns.passed,
+      checks,
     };
   }
 
-  /**
-   * Verifies that cached ledger_balances match the sum of detailed journal entries.
-   */
+  /** Cached ledger_balances must equal the opening balance plus the journal entries. */
   checkLedgerBalances(companyId) {
-    const discrepancies = [];
-
-    // Fetch all ledgers and their running balances
-    const ledgers = this.db
-      .prepare('SELECT id, name, opening_balance, nature FROM ledgers WHERE company_id = ?')
-      .all(companyId);
-
-    for (const l of ledgers) {
-      // Sum CGST/SGST/Debit/Credit journal entries
-      const summary = this.db
-        .prepare(
-          `
-        SELECT 
-          COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0 END), 0) AS debits,
-          COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE 0 END), 0) AS credits
-        FROM journal_entries je
-        JOIN vouchers v ON je.voucher_id = v.id AND v.company_id = ? AND v.status <> 'CANCELLED'
-        WHERE je.ledger_id = ?
-      `,
-        )
-        .get(companyId, l.id);
-
-      let calculated = l.opening_balance;
-      if (l.nature === 'Debit') {
-        calculated += summary.debits - summary.credits;
-      } else {
-        calculated += summary.credits - summary.debits;
-      }
-      calculated = roundMoney(calculated);
-
-      // Fetch cached balance
-      const cachedRow = this.db
-        .prepare(
-          'SELECT running_balance FROM ledger_balances WHERE company_id = ? AND ledger_id = ?',
-        )
-        .get(companyId, l.id);
-      const cached = cachedRow ? roundMoney(cachedRow.running_balance) : 0;
-
-      if (Math.abs(calculated - cached) > 0.01) {
-        discrepancies.push({
-          ledgerId: l.id,
-          ledgerName: l.name,
-          expectedBalance: calculated,
-          cachedBalance: cached,
-          discrepancy: roundMoney(calculated - cached),
-        });
-      }
-    }
-
-    return discrepancies;
+    return this.db
+      .prepare(
+        `SELECT l.id, l.name, l.nature, l.opening_balance,
+           COALESCE(SUM(CASE WHEN v.id IS NOT NULL AND je.entry_type = 'DEBIT' THEN je.amount END), 0) AS debits,
+           COALESCE(SUM(CASE WHEN v.id IS NOT NULL AND je.entry_type = 'CREDIT' THEN je.amount END), 0) AS credits,
+           (SELECT running_balance FROM ledger_balances lb
+             WHERE lb.company_id = @companyId AND lb.ledger_id = l.id) AS cached
+         FROM ledgers l
+         LEFT JOIN journal_entries je ON je.ledger_id = l.id
+         LEFT JOIN vouchers v ON je.voucher_id = v.id AND v.company_id = @companyId AND v.status <> 'CANCELLED'
+         WHERE l.company_id = @companyId
+         GROUP BY l.id`,
+      )
+      .all({ companyId })
+      .flatMap((l) => {
+        const calculated = roundMoney(
+          l.opening_balance + (l.nature === 'Debit' ? l.debits - l.credits : l.credits - l.debits),
+        );
+        const cached = roundMoney(l.cached ?? 0);
+        return Math.abs(calculated - cached) > 0.01
+          ? [
+              {
+                ledgerId: l.id,
+                ledgerName: l.name,
+                expectedBalance: calculated,
+                cachedBalance: cached,
+                discrepancy: roundMoney(calculated - cached),
+              },
+            ]
+          : [];
+      });
   }
 
-  /**
-   * Verifies that customer receipts and invoice amount_paid figures match receipt_allocations entries,
-   * and verifies that supplier payments and purchase_bill amount_paid figures match supplier_allocations.
-   */
+  /** Receipts, payments and bills must agree with their allocation rows. */
   checkAllocationIntegrity(companyId) {
-    const discrepancies = [];
-
-    // 1. Verify customer receipts unallocated balances
-    const receipts = this.db
-      .prepare(
-        "SELECT id, receipt_number, amount, unallocated_amount FROM customer_receipts WHERE company_id = ? AND status = 'ACTIVE'",
-      )
-      .all(companyId);
-    for (const r of receipts) {
-      const allocatedSum = this.db
+    return ALLOCATION_CHECKS.flatMap(({ type, table, number, where, sums, kind, label }) =>
+      this.db
         .prepare(
-          'SELECT COALESCE(SUM(allocated_amount), 0) AS total FROM receipt_allocations WHERE customer_receipt_id = ?',
+          `SELECT d.id, d.${number} AS number,
+             ${kind === 'unallocated' ? 'd.amount, d.unallocated_amount' : 'd.amount_paid'},
+             COALESCE(a.total, 0) AS allocated
+           FROM ${table} d LEFT JOIN (${sums}) a ON a.id = d.id
+           WHERE ${where.replaceAll(/\b(company_id|status)\b/g, 'd.$1')}`,
         )
-        .get(r.id).total;
-      const calculatedUnallocated = roundMoney(r.amount - allocatedSum);
-
-      if (Math.abs(calculatedUnallocated - r.unallocated_amount) > 0.01) {
-        discrepancies.push({
-          type: 'customer_receipt',
-          id: r.id,
-          number: r.receipt_number,
-          message: `Unallocated balance mismatch. Document unallocated: ${r.unallocated_amount}, calculated: ${calculatedUnallocated}.`,
-        });
-      }
-    }
-
-    // 2. Verify direct invoice amount_paid balances
-    const directInvoices = this.db
-      .prepare(
-        "SELECT id, invoice_number, grand_total, amount_paid FROM direct_invoices WHERE company_id = ? AND status <> 'CANCELLED'",
-      )
-      .all(companyId);
-    for (const di of directInvoices) {
-      const allocatedSum = this.db
-        .prepare(
-          "SELECT COALESCE(SUM(allocated_amount), 0) AS total FROM receipt_allocations WHERE document_type = 'direct_invoice' AND document_id = ?",
-        )
-        .get(di.id).total;
-      if (Math.abs(roundMoney(allocatedSum) - di.amount_paid) > 0.01) {
-        discrepancies.push({
-          type: 'direct_invoice',
-          id: di.id,
-          number: di.invoice_number,
-          message: `Amount paid mismatch. Document paid: ${di.amount_paid}, allocations sum: ${allocatedSum}.`,
-        });
-      }
-    }
-
-    // 3. Verify job card invoices amount_paid balances
-    const invoices = this.db
-      .prepare(
-        "SELECT id, invoice_number, grand_total, amount_paid FROM invoices WHERE status = 'FINALIZED'",
-      )
-      .all();
-    for (const inv of invoices) {
-      const allocatedSum = this.db
-        .prepare(
-          "SELECT COALESCE(SUM(allocated_amount), 0) AS total FROM receipt_allocations WHERE document_type = 'job_card_invoice' AND document_id = ?",
-        )
-        .get(inv.id).total;
-      if (Math.abs(roundMoney(allocatedSum) - inv.amount_paid) > 0.01) {
-        discrepancies.push({
-          type: 'job_card_invoice',
-          id: inv.id,
-          number: inv.invoice_number,
-          message: `Amount paid mismatch. Invoice paid: ${inv.amount_paid}, allocations sum: ${allocatedSum}.`,
-        });
-      }
-    }
-
-    // 4. Verify supplier payments unallocated balances (New in Sprint 4)
-    const payments = this.db
-      .prepare(
-        "SELECT id, payment_number, amount, unallocated_amount FROM supplier_payments WHERE company_id = ? AND status = 'ACTIVE'",
-      )
-      .all(companyId);
-    for (const p of payments) {
-      const allocatedSum = this.db
-        .prepare(
-          'SELECT COALESCE(SUM(allocated_amount), 0) AS total FROM supplier_allocations WHERE supplier_payment_id = ?',
-        )
-        .get(p.id).total;
-      const calculatedUnallocated = roundMoney(p.amount - allocatedSum);
-
-      if (Math.abs(calculatedUnallocated - p.unallocated_amount) > 0.01) {
-        discrepancies.push({
-          type: 'supplier_payment',
-          id: p.id,
-          number: p.payment_number,
-          message: `Unallocated balance mismatch. Document unallocated: ${p.unallocated_amount}, calculated: ${calculatedUnallocated}.`,
-        });
-      }
-    }
-
-    // 5. Verify purchase bills amount_paid balances (New in Sprint 4)
-    const purchaseBills = this.db
-      .prepare(
-        "SELECT id, bill_number, grand_total, amount_paid FROM purchase_bills WHERE company_id = ? AND status <> 'CANCELLED'",
-      )
-      .all(companyId);
-    for (const pb of purchaseBills) {
-      const allocatedSum = this.db
-        .prepare(
-          "SELECT COALESCE(SUM(allocated_amount), 0) AS total FROM supplier_allocations WHERE document_type = 'purchase_bill' AND document_id = ?",
-        )
-        .get(pb.id).total;
-      if (Math.abs(roundMoney(allocatedSum) - pb.amount_paid) > 0.01) {
-        discrepancies.push({
-          type: 'purchase_bill',
-          id: pb.id,
-          number: pb.bill_number,
-          message: `Amount paid mismatch. Document paid: ${pb.amount_paid}, allocations sum: ${allocatedSum}.`,
-        });
-      }
-    }
-
-    return discrepancies;
+        .all(where.includes('@companyId') ? { companyId } : {})
+        .flatMap((doc) => {
+          if (kind === 'unallocated') {
+            const calculated = roundMoney(doc.amount - doc.allocated);
+            return Math.abs(calculated - doc.unallocated_amount) > 0.01
+              ? [
+                  {
+                    type,
+                    id: doc.id,
+                    number: doc.number,
+                    message: `Unallocated balance mismatch. Document unallocated: ${doc.unallocated_amount}, calculated: ${calculated}.`,
+                  },
+                ]
+              : [];
+          }
+          return Math.abs(roundMoney(doc.allocated) - doc.amount_paid) > 0.01
+            ? [
+                {
+                  type,
+                  id: doc.id,
+                  number: doc.number,
+                  message: `Amount paid mismatch. ${label}: ${doc.amount_paid}, allocations sum: ${doc.allocated}.`,
+                },
+              ]
+            : [];
+        }),
+    );
   }
 
-  /**
-   * Verifies that the net sum of all ledgers is 0 (double-entry Trial Balance balance checks).
-   */
+  /** All debits must equal all credits. */
   checkTrialBalanceBalanced(companyId) {
     const summary = this.db
       .prepare(
-        `
-      SELECT 
-        COALESCE(SUM(CASE WHEN je.entry_type = 'DEBIT' THEN je.amount ELSE 0 END), 0) AS debits,
-        COALESCE(SUM(CASE WHEN je.entry_type = 'CREDIT' THEN je.amount ELSE 0 END), 0) AS credits
-      FROM journal_entries je
-      JOIN vouchers v ON je.voucher_id = v.id AND v.company_id = ? AND v.status <> 'CANCELLED'
-    `,
+        `SELECT
+           COALESCE(SUM(CASE WHEN je.entry_type = 'DEBIT' THEN je.amount ELSE 0 END), 0) AS debits,
+           COALESCE(SUM(CASE WHEN je.entry_type = 'CREDIT' THEN je.amount ELSE 0 END), 0) AS credits
+         FROM journal_entries je
+         JOIN vouchers v ON je.voucher_id = v.id AND v.company_id = ? AND v.status <> 'CANCELLED'`,
       )
       .get(companyId);
-
     const debits = roundMoney(summary.debits);
     const credits = roundMoney(summary.credits);
-    const diff = roundMoney(Math.abs(debits - credits));
-
-    return {
-      debits,
-      credits,
-      isBalanced: diff < 0.01,
-      difference: diff,
-    };
+    const difference = roundMoney(Math.abs(debits - credits));
+    return { debits, credits, isBalanced: difference < 0.01, difference };
   }
 
+  /** Each item's stored quantity must equal the sum of its batches. */
   checkInventoryStockIntegrity() {
-    const discrepancies = [];
-    const items = this.db
-      .prepare('SELECT id, sku, item_name, current_quantity FROM inventory_items')
-      .all();
-    for (const item of items) {
-      const batchSum = this.db
-        .prepare(
-          'SELECT COALESCE(SUM(quantity), 0) AS total FROM inventory_batches WHERE item_id = ?',
-        )
-        .get(item.id).total;
-      if (Math.abs(Number(item.current_quantity) - Number(batchSum)) > 0.001) {
-        discrepancies.push({
-          itemId: item.id,
-          sku: item.sku,
-          itemName: item.item_name,
-          currentQuantity: item.current_quantity,
-          batchQuantitySum: batchSum,
-          discrepancy: Math.round((Number(item.current_quantity) - Number(batchSum)) * 100) / 100,
-        });
-      }
-    }
-    return discrepancies;
+    return this.db
+      .prepare(
+        `SELECT i.id, i.sku, i.item_name, i.current_quantity, COALESCE(SUM(b.quantity), 0) AS batch_total
+         FROM inventory_items i LEFT JOIN inventory_batches b ON b.item_id = i.id
+         GROUP BY i.id`,
+      )
+      .all()
+      .filter((item) => Math.abs(Number(item.current_quantity) - Number(item.batch_total)) > 0.001)
+      .map((item) => ({
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.item_name,
+        currentQuantity: item.current_quantity,
+        batchQuantitySum: item.batch_total,
+        discrepancy: roundMoney(Number(item.current_quantity) - Number(item.batch_total)),
+      }));
   }
 
+  /** No invoice line may be returned more times than it was sold. */
   checkReturnLimitsIntegrity(companyId) {
-    const discrepancies = [];
-    const rows = this.db
+    return this.db
       .prepare(
-        `
-      SELECT 
-        ri.item_id,
-        ri.customer_return_id,
-        r.invoice_id,
-        r.return_number,
-        item.sku,
-        SUM(ri.quantity) AS total_returned,
-        (SELECT SUM(ii.quantity) FROM invoice_items ii
-          WHERE ii.invoice_id=r.invoice_id AND ii.inventory_item_id=ri.item_id) AS original_quantity
-      FROM customer_return_items ri
-      JOIN customer_returns r ON ri.customer_return_id = r.id
-      JOIN inventory_items item ON ri.item_id = item.id
-      WHERE r.company_id = ? AND r.status <> 'CANCELLED'
-      GROUP BY r.invoice_id, ri.item_id
-    `,
+        `SELECT ri.item_id, r.invoice_id, item.sku, SUM(ri.quantity) AS total_returned,
+           (SELECT SUM(ii.quantity) FROM invoice_items ii
+             WHERE ii.invoice_id = r.invoice_id AND ii.inventory_item_id = ri.item_id) AS original_quantity
+         FROM customer_return_items ri
+         JOIN customer_returns r ON ri.customer_return_id = r.id
+         JOIN inventory_items item ON ri.item_id = item.id
+         WHERE r.company_id = ? AND r.status <> 'CANCELLED'
+         GROUP BY r.invoice_id, ri.item_id`,
       )
-      .all(companyId);
-
-    for (const row of rows) {
-      if (Number(row.total_returned) > Number(row.original_quantity)) {
-        discrepancies.push({
-          invoiceId: row.invoice_id,
-          itemId: row.item_id,
-          sku: row.sku,
-          totalReturned: row.total_returned,
-          originalQuantity: row.original_quantity,
-          discrepancy:
-            Math.round((Number(row.total_returned) - Number(row.original_quantity)) * 100) / 100,
-        });
-      }
-    }
-    return discrepancies;
+      .all(companyId)
+      .filter((row) => Number(row.total_returned) > Number(row.original_quantity))
+      .map((row) => ({
+        invoiceId: row.invoice_id,
+        itemId: row.item_id,
+        sku: row.sku,
+        totalReturned: row.total_returned,
+        originalQuantity: row.original_quantity,
+        discrepancy: roundMoney(Number(row.total_returned) - Number(row.original_quantity)),
+      }));
   }
 }

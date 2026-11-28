@@ -4,6 +4,54 @@ import { roundMoney } from '../../shared/utils/numbers.js';
 const invoiceCredits = `(SELECT COALESCE(SUM(total_refund_amount), 0) FROM customer_returns
   WHERE invoice_id = invoices.id AND status = 'COMPLETED')`;
 
+// The bills a payment can be matched to. Job card invoices keep the payment
+// state in payment_status (their status is FINALIZED/CANCELLED); counter bills
+// and supplier bills keep it in status.
+const DOCUMENTS = {
+  job_card_invoice: {
+    table: 'invoices',
+    party: 'customer_id',
+    column: 'payment_status',
+    partly: 'PARTIAL',
+  },
+  direct_invoice: {
+    table: 'direct_invoices',
+    party: 'customer_id',
+    column: 'status',
+    partly: 'PARTIALLY_PAID',
+  },
+  purchase_bill: {
+    table: 'purchase_bills',
+    party: 'supplier_id',
+    column: 'status',
+    partly: 'PARTIALLY_PAID',
+  },
+};
+
+// The payments: a customer receipt or a payment to a supplier.
+const PAYMENTS = {
+  CUSTOMER: {
+    table: 'customer_receipts',
+    party: 'customer_id',
+    links: 'receipt_allocations',
+    key: 'customer_receipt_id',
+    label: 'Receipt',
+  },
+  SUPPLIER: {
+    table: 'supplier_payments',
+    party: 'supplier_id',
+    links: 'supplier_allocations',
+    key: 'supplier_payment_id',
+    label: 'Payment',
+  },
+};
+
+const paymentKind = (type) => {
+  const kind = PAYMENTS[type];
+  if (!kind) throw new AppError(`Invalid allocation type: ${type}`, 400, 'INVALID_ALLOCATION_TYPE');
+  return kind;
+};
+
 /**
  * Unlinks every customer payment from one bill that is being cancelled. The
  * money stays on each receipt as unused (an advance the customer has with us),
@@ -27,34 +75,15 @@ export function releaseDocumentAllocations(db, documentType, documentId) {
   return roundMoney(released);
 }
 
-/**
- * Service to manage invoice/bill matching and payment allocations polymorphically.
- * Supports both CUSTOMER and SUPPLIER modes.
- */
+/** Matches customer receipts and supplier payments to the bills they pay. */
 export class AllocationService {
   constructor(db) {
     this.db = db;
   }
 
-  // ==========================================
-  // BACKWARD COMPATIBLE CUSTOMER METHODS
-  // ==========================================
-
-  allocateReceiptFIFO(receiptId, companyId, customerId, amount) {
-    return this.allocateFIFO('CUSTOMER', receiptId, companyId, customerId, amount);
-  }
-
   allocateReceiptManual(receiptId, allocations) {
     return this.allocateManual('CUSTOMER', receiptId, allocations);
   }
-
-  cancelReceiptAllocations(receiptId) {
-    return this.cancelAllocations('CUSTOMER', receiptId);
-  }
-
-  // ==========================================
-  // POLYMORPHIC CORE METHODS
-  // ==========================================
 
   /**
    * Retrieves outstanding documents (unpaid / partially paid).
@@ -146,36 +175,14 @@ export class AllocationService {
   }
 
   allocateManualTransaction(type, paymentId, allocations) {
-    let parentQuery, parentUpdate, allocationInsert;
-
-    if (type === 'CUSTOMER') {
-      parentQuery =
-        "SELECT amount, unallocated_amount, customer_id AS partyId FROM customer_receipts WHERE id = ? AND status = 'ACTIVE'";
-      parentUpdate = 'UPDATE customer_receipts SET unallocated_amount = ? WHERE id = ?';
-      allocationInsert = `
-        INSERT INTO receipt_allocations (customer_receipt_id, document_type, document_id, allocated_amount)
-        VALUES (?, ?, ?, ?)
-      `;
-    } else if (type === 'SUPPLIER') {
-      parentQuery =
-        "SELECT amount, unallocated_amount, supplier_id AS partyId FROM supplier_payments WHERE id = ? AND status = 'ACTIVE'";
-      parentUpdate = 'UPDATE supplier_payments SET unallocated_amount = ? WHERE id = ?';
-      allocationInsert = `
-        INSERT INTO supplier_allocations (supplier_payment_id, document_type, document_id, allocated_amount)
-        VALUES (?, ?, ?, ?)
-      `;
-    } else {
-      throw new AppError(`Invalid allocation type: ${type}`, 400, 'INVALID_ALLOCATION_TYPE');
-    }
-
-    const parentDoc = this.db.prepare(parentQuery).get(paymentId);
-    if (!parentDoc) {
-      throw new AppError(
-        `${type === 'CUSTOMER' ? 'Receipt' : 'Payment'} document not found.`,
-        404,
-        'PAYMENT_DOCUMENT_NOT_FOUND',
-      );
-    }
+    const payment = paymentKind(type);
+    const parentDoc = this.db
+      .prepare(
+        `SELECT amount, unallocated_amount, ${payment.party} AS partyId FROM ${payment.table} WHERE id = ? AND status = 'ACTIVE'`,
+      )
+      .get(paymentId);
+    if (!parentDoc)
+      throw new AppError(`${payment.label} document not found.`, 404, 'PAYMENT_DOCUMENT_NOT_FOUND');
 
     let totalAllocated = 0;
     for (const alloc of allocations) {
@@ -185,7 +192,6 @@ export class AllocationService {
       }
       totalAllocated = roundMoney(totalAllocated + amt);
     }
-
     if (totalAllocated > parentDoc.unallocated_amount) {
       throw new AppError(
         `Allocation amount (${totalAllocated}) exceeds unallocated balance (${parentDoc.unallocated_amount}).`,
@@ -194,39 +200,19 @@ export class AllocationService {
       );
     }
 
-    const insertAlloc = this.db.prepare(allocationInsert);
-
+    const insertAlloc = this.db.prepare(
+      `INSERT INTO ${payment.links} (${payment.key}, document_type, document_id, allocated_amount) VALUES (?, ?, ?, ?)`,
+    );
     for (const alloc of allocations) {
       const amt = roundMoney(Number(alloc.allocatedAmount));
-
-      // Fetch target document
-      let doc;
-      if (alloc.documentType === 'job_card_invoice') {
-        doc = this.db
-          .prepare(
-            'SELECT grand_total, amount_paid, customer_id, status FROM invoices WHERE id = ?',
-          )
-          .get(alloc.documentId);
-      } else if (alloc.documentType === 'direct_invoice') {
-        doc = this.db
-          .prepare(
-            'SELECT grand_total, amount_paid, customer_id, status FROM direct_invoices WHERE id = ?',
-          )
-          .get(alloc.documentId);
-      } else if (alloc.documentType === 'purchase_bill') {
-        doc = this.db
-          .prepare(
-            'SELECT grand_total, amount_paid, supplier_id, status FROM purchase_bills WHERE id = ?',
-          )
-          .get(alloc.documentId);
-      } else {
+      const kind = DOCUMENTS[alloc.documentType];
+      if (!kind)
         throw new AppError(
           `Invalid document type: ${alloc.documentType}`,
           400,
           'INVALID_DOCUMENT_TYPE',
         );
-      }
-
+      const doc = this.document(alloc.documentType, alloc.documentId);
       if (!doc) {
         throw new AppError(
           `Document of type ${alloc.documentType} with ID ${alloc.documentId} not found.`,
@@ -234,11 +220,6 @@ export class AllocationService {
           'DOCUMENT_NOT_FOUND',
         );
       }
-
-      if (alloc.documentType === 'job_card_invoice') {
-        doc.grand_total = this.invoiceNetTotal(alloc.documentId);
-      }
-
       if (
         doc.status === 'CANCELLED' ||
         (alloc.documentType === 'job_card_invoice' && doc.status !== 'FINALIZED')
@@ -249,23 +230,20 @@ export class AllocationService {
           'DOCUMENT_NOT_ACTIVE',
         );
       }
-      if ((type === 'CUSTOMER') !== (alloc.documentType !== 'purchase_bill')) {
+      if ((type === 'CUSTOMER') !== (kind.party === 'customer_id')) {
         throw new AppError(
           'Document type does not match payment type.',
           400,
           'INVALID_DOCUMENT_TYPE',
         );
       }
-
-      const partyIdFromDoc = doc.customer_id || doc.supplier_id;
-      if (partyIdFromDoc !== parentDoc.partyId) {
+      if (doc[kind.party] !== parentDoc.partyId) {
         throw new AppError(
           `Cannot allocate to a different party's document.`,
           400,
           'PARTY_MISMATCH',
         );
       }
-
       const outstanding = roundMoney(doc.grand_total - doc.amount_paid);
       if (amt > outstanding) {
         throw new AppError(
@@ -274,106 +252,53 @@ export class AllocationService {
           'ALLOCATION_EXCEEDS_OUTSTANDING',
         );
       }
-
-      const newPaid = roundMoney(doc.amount_paid + amt);
-      const newStatus = newPaid >= doc.grand_total ? 'PAID' : 'PARTIALLY_PAID';
-
-      // Update target document
-      if (alloc.documentType === 'job_card_invoice') {
-        const newPaymentStatus = newPaid >= doc.grand_total ? 'PAID' : 'PARTIAL';
-        this.db
-          .prepare(
-            'UPDATE invoices SET amount_paid = ?, payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-          )
-          .run(newPaid, newPaymentStatus, alloc.documentId);
-      } else if (alloc.documentType === 'direct_invoice') {
-        this.db
-          .prepare(
-            'UPDATE direct_invoices SET amount_paid = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-          )
-          .run(newPaid, newStatus, alloc.documentId);
-      } else if (alloc.documentType === 'purchase_bill') {
-        this.db
-          .prepare(
-            'UPDATE purchase_bills SET amount_paid = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-          )
-          .run(newPaid, newStatus, alloc.documentId);
-      }
-
-      // Insert allocation details
+      this.setPaid(alloc.documentType, alloc.documentId, doc, roundMoney(doc.amount_paid + amt));
       insertAlloc.run(paymentId, alloc.documentType, alloc.documentId, amt);
     }
 
-    // Decrement unallocated amount on parent document
-    const newUnallocated = roundMoney(parentDoc.unallocated_amount - totalAllocated);
-    this.db.prepare(parentUpdate).run(newUnallocated, paymentId);
+    this.db
+      .prepare(`UPDATE ${payment.table} SET unallocated_amount = ? WHERE id = ?`)
+      .run(roundMoney(parentDoc.unallocated_amount - totalAllocated), paymentId);
   }
 
-  /**
-   * Reverses all allocations associated with a payment.
-   */
+  /** Reverses all allocations of a payment: each bill gets its amount back as unpaid. */
   cancelAllocations(type, paymentId) {
-    let allocationsQuery, allocationDelete;
-    if (type === 'CUSTOMER') {
-      allocationsQuery = 'SELECT * FROM receipt_allocations WHERE customer_receipt_id = ?';
-      allocationDelete = 'DELETE FROM receipt_allocations WHERE customer_receipt_id = ?';
-    } else if (type === 'SUPPLIER') {
-      allocationsQuery = 'SELECT * FROM supplier_allocations WHERE supplier_payment_id = ?';
-      allocationDelete = 'DELETE FROM supplier_allocations WHERE supplier_payment_id = ?';
-    } else {
-      throw new AppError(`Invalid allocation type: ${type}`, 400, 'INVALID_ALLOCATION_TYPE');
-    }
-
-    const allocations = this.db.prepare(allocationsQuery).all(paymentId);
-
+    const payment = paymentKind(type);
+    const allocations = this.db
+      .prepare(`SELECT * FROM ${payment.links} WHERE ${payment.key} = ?`)
+      .all(paymentId);
     for (const alloc of allocations) {
-      let doc;
-      if (alloc.document_type === 'job_card_invoice') {
-        doc = this.db
-          .prepare('SELECT grand_total, amount_paid FROM invoices WHERE id = ?')
-          .get(alloc.document_id);
-      } else if (alloc.document_type === 'direct_invoice') {
-        doc = this.db
-          .prepare('SELECT grand_total, amount_paid FROM direct_invoices WHERE id = ?')
-          .get(alloc.document_id);
-      } else if (alloc.document_type === 'purchase_bill') {
-        doc = this.db
-          .prepare('SELECT grand_total, amount_paid FROM purchase_bills WHERE id = ?')
-          .get(alloc.document_id);
-      }
-
-      if (doc) {
-        if (alloc.document_type === 'job_card_invoice')
-          doc.grand_total = this.invoiceNetTotal(alloc.document_id);
-        const newPaid = roundMoney(Math.max(0, doc.amount_paid - alloc.allocated_amount));
-        const newStatus = newPaid === 0 ? 'UNPAID' : 'PARTIALLY_PAID';
-
-        if (alloc.document_type === 'job_card_invoice') {
-          const newPaymentStatus =
-            newPaid >= doc.grand_total ? 'PAID' : newPaid === 0 ? 'UNPAID' : 'PARTIAL';
-          this.db
-            .prepare(
-              'UPDATE invoices SET amount_paid = ?, payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            )
-            .run(newPaid, newPaymentStatus, alloc.document_id);
-        } else if (alloc.document_type === 'direct_invoice') {
-          this.db
-            .prepare(
-              'UPDATE direct_invoices SET amount_paid = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            )
-            .run(newPaid, newStatus, alloc.document_id);
-        } else if (alloc.document_type === 'purchase_bill') {
-          this.db
-            .prepare(
-              'UPDATE purchase_bills SET amount_paid = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            )
-            .run(newPaid, newStatus, alloc.document_id);
-        }
-      }
+      const doc =
+        DOCUMENTS[alloc.document_type] && this.document(alloc.document_type, alloc.document_id);
+      if (doc)
+        this.setPaid(
+          alloc.document_type,
+          alloc.document_id,
+          doc,
+          roundMoney(Math.max(0, doc.amount_paid - alloc.allocated_amount)),
+        );
     }
+    this.db.prepare(`DELETE FROM ${payment.links} WHERE ${payment.key} = ?`).run(paymentId);
+  }
 
-    // Delete allocation details
-    this.db.prepare(allocationDelete).run(paymentId);
+  /** A bill with its total (job card invoices net of completed returns) and amount paid. */
+  document(documentType, documentId) {
+    const { table } = DOCUMENTS[documentType];
+    const doc = this.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(documentId);
+    if (doc && documentType === 'job_card_invoice')
+      doc.grand_total = this.invoiceNetTotal(documentId);
+    return doc;
+  }
+
+  /** Saves a bill's new amount paid with its PAID / partly paid / UNPAID state. */
+  setPaid(documentType, documentId, doc, paid) {
+    const { table, column, partly } = DOCUMENTS[documentType];
+    const state = paid >= doc.grand_total ? 'PAID' : paid === 0 ? 'UNPAID' : partly;
+    this.db
+      .prepare(
+        `UPDATE ${table} SET amount_paid = ?, ${column} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      )
+      .run(paid, state, documentId);
   }
 
   invoiceNetTotal(invoiceId) {

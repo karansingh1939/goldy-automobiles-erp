@@ -1,3 +1,5 @@
+import { roundMoney } from '../../shared/utils/numbers.js';
+
 export class CustomerCreditRepository {
   constructor(db) {
     this.db = db;
@@ -20,6 +22,6 @@ export class CustomerCreditRepository {
         WHERE l.id = ? AND l.company_id = ? GROUP BY l.id`,
       )
       .get(companyId, ledgerId, companyId);
-    return Math.round(Number(balance?.outstanding || 0) * 100) / 100;
+    return roundMoney(balance?.outstanding);
   }
 }

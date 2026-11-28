@@ -1,6 +1,28 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import { sqlWhere } from '../../shared/utils/validation.js';
 
+// The two kinds of return differ only in their tables and the document they refer to.
+const KINDS = {
+  customer: {
+    table: 'customer_returns',
+    items: 'customer_return_items',
+    parentKey: 'customer_return_id',
+    select: `SELECT r.*, c.name AS customer_name, inv.invoice_number
+      FROM customer_returns r
+      JOIN customers c ON r.customer_id = c.id
+      JOIN invoices inv ON r.invoice_id = inv.id`,
+  },
+  supplier: {
+    table: 'supplier_returns',
+    items: 'supplier_return_items',
+    parentKey: 'supplier_return_id',
+    select: `SELECT r.*, s.name AS supplier_name, p.purchase_number
+      FROM supplier_returns r
+      JOIN suppliers s ON r.supplier_id = s.id
+      LEFT JOIN purchases p ON r.purchase_id = p.id`,
+  },
+};
+
 export class ReturnsRepository {
   constructor(db) {
     this.db = db;
@@ -8,6 +30,45 @@ export class ReturnsRepository {
 
   transaction(fn) {
     return this.db.transaction(fn)();
+  }
+
+  /** A return with its lines (item, godown and batch names); null when missing. */
+  findReturn(kind, id) {
+    const { select, items, parentKey } = KINDS[kind];
+    const ret = this.db.prepare(`${select} WHERE r.id = ?`).get(id);
+    if (!ret) return null;
+    ret.items = this.db
+      .prepare(
+        `SELECT ri.*, item.item_name, item.sku, wh.name AS warehouse_name, b.batch_number
+         FROM ${items} ri
+         JOIN inventory_items item ON ri.item_id = item.id
+         JOIN warehouses wh ON ri.warehouse_id = wh.id
+         JOIN inventory_batches b ON ri.batch_id = b.id
+         WHERE ri.${parentKey} = ?`,
+      )
+      .all(id);
+    return ret;
+  }
+
+  /** Returns of one kind, newest first, filtered by the conditions given. */
+  listReturns(kind, conditions) {
+    const { sql: where, params } = sqlWhere(conditions);
+    return this.db
+      .prepare(`${KINDS[kind].select} ${where} ORDER BY r.return_date DESC, r.id DESC`)
+      .all(params);
+  }
+
+  /** Saves the given columns of a return and reads it back. */
+  updateReturn(kind, id, data) {
+    const setClause = Object.keys(data)
+      .map((col) => `${col} = @${col}`)
+      .join(', ');
+    this.db
+      .prepare(
+        `UPDATE ${KINDS[kind].table} SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = @id`,
+      )
+      .run({ ...data, id });
+    return this.findReturn(kind, id);
   }
 
   // CUSTOMER RETURNS
@@ -84,38 +145,11 @@ export class ReturnsRepository {
   }
 
   findCustomerReturnById(id) {
-    const ret = this.db
-      .prepare(
-        `
-      SELECT r.*, c.name AS customer_name, inv.invoice_number
-      FROM customer_returns r
-      JOIN customers c ON r.customer_id = c.id
-      JOIN invoices inv ON r.invoice_id = inv.id
-      WHERE r.id = ?
-    `,
-      )
-      .get(id);
-
-    if (!ret) return null;
-
-    ret.items = this.db
-      .prepare(
-        `
-      SELECT ri.*, item.item_name, item.sku, wh.name AS warehouse_name, b.batch_number
-      FROM customer_return_items ri
-      JOIN inventory_items item ON ri.item_id = item.id
-      JOIN warehouses wh ON ri.warehouse_id = wh.id
-      JOIN inventory_batches b ON ri.batch_id = b.id
-      WHERE ri.customer_return_id = ?
-    `,
-      )
-      .all(id);
-
-    return ret;
+    return this.findReturn('customer', id);
   }
 
   listCustomerReturns({ companyId, customerId, invoiceId, status, dateFrom, dateTo }) {
-    const { sql: where, params } = sqlWhere([
+    return this.listReturns('customer', [
       ['r.company_id = ?', companyId],
       ['r.customer_id = ?', customerId],
       ['r.invoice_id = ?', invoiceId],
@@ -123,34 +157,10 @@ export class ReturnsRepository {
       ['DATE(r.return_date) >= DATE(?)', dateFrom],
       ['DATE(r.return_date) <= DATE(?)', dateTo],
     ]);
-    return this.db
-      .prepare(
-        `
-      SELECT r.*, c.name AS customer_name, inv.invoice_number
-      FROM customer_returns r
-      JOIN customers c ON r.customer_id = c.id
-      JOIN invoices inv ON r.invoice_id = inv.id
-      ${where}
-      ORDER BY r.return_date DESC, r.id DESC
-    `,
-      )
-      .all(params);
   }
 
   updateCustomerReturn(id, data) {
-    const columns = Object.keys(data);
-    const setClause = columns.map((col) => `${col} = @${col}`).join(', ');
-    this.db
-      .prepare(
-        `
-      UPDATE customer_returns
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
-      WHERE id = @id
-    `,
-      )
-      .run({ ...data, id });
-
-    return this.findCustomerReturnById(id);
+    return this.updateReturn('customer', id, data);
   }
 
   getAlreadyReturnedQuantity(invoiceId, invoiceItem) {
@@ -235,8 +245,12 @@ export class ReturnsRepository {
         unit_cost,
         gst_rate,
         gst_amount,
-        line_total
-        , source_table, source_item_id, cgst_amount, sgst_amount, igst_amount
+        line_total,
+        source_table,
+        source_item_id,
+        cgst_amount,
+        sgst_amount,
+        igst_amount
       ) VALUES (
         @supplier_return_id,
         @item_id,
@@ -246,8 +260,12 @@ export class ReturnsRepository {
         @unit_cost,
         @gst_rate,
         @gst_amount,
-        @line_total
-        , @source_table, @source_item_id, @cgst_amount, @sgst_amount, @igst_amount
+        @line_total,
+        @source_table,
+        @source_item_id,
+        @cgst_amount,
+        @sgst_amount,
+        @igst_amount
       )
     `,
       )
@@ -255,38 +273,11 @@ export class ReturnsRepository {
   }
 
   findSupplierReturnById(id) {
-    const ret = this.db
-      .prepare(
-        `
-      SELECT r.*, s.name AS supplier_name, p.purchase_number
-      FROM supplier_returns r
-      JOIN suppliers s ON r.supplier_id = s.id
-      LEFT JOIN purchases p ON r.purchase_id = p.id
-      WHERE r.id = ?
-    `,
-      )
-      .get(id);
-
-    if (!ret) return null;
-
-    ret.items = this.db
-      .prepare(
-        `
-      SELECT ri.*, item.item_name, item.sku, wh.name AS warehouse_name, b.batch_number
-      FROM supplier_return_items ri
-      JOIN inventory_items item ON ri.item_id = item.id
-      JOIN warehouses wh ON ri.warehouse_id = wh.id
-      JOIN inventory_batches b ON ri.batch_id = b.id
-      WHERE ri.supplier_return_id = ?
-    `,
-      )
-      .all(id);
-
-    return ret;
+    return this.findReturn('supplier', id);
   }
 
   listSupplierReturns({ companyId, supplierId, purchaseId, status, dateFrom, dateTo }) {
-    const { sql: where, params } = sqlWhere([
+    return this.listReturns('supplier', [
       ['r.company_id = ?', companyId],
       ['r.supplier_id = ?', supplierId],
       ['r.purchase_id = ?', purchaseId],
@@ -294,34 +285,10 @@ export class ReturnsRepository {
       ['DATE(r.return_date) >= DATE(?)', dateFrom],
       ['DATE(r.return_date) <= DATE(?)', dateTo],
     ]);
-    return this.db
-      .prepare(
-        `
-      SELECT r.*, s.name AS supplier_name, p.purchase_number
-      FROM supplier_returns r
-      JOIN suppliers s ON r.supplier_id = s.id
-      LEFT JOIN purchases p ON r.purchase_id = p.id
-      ${where}
-      ORDER BY r.return_date DESC, r.id DESC
-    `,
-      )
-      .all(params);
   }
 
   updateSupplierReturn(id, data) {
-    const columns = Object.keys(data);
-    const setClause = columns.map((col) => `${col} = @${col}`).join(', ');
-    this.db
-      .prepare(
-        `
-      UPDATE supplier_returns
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
-      WHERE id = @id
-    `,
-      )
-      .run({ ...data, id });
-
-    return this.findSupplierReturnById(id);
+    return this.updateReturn('supplier', id, data);
   }
 
   // CORE UTILITIES

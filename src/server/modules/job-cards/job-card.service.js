@@ -1,5 +1,5 @@
 import { assertCustomerCreditLimit } from '../accounting/customer-credit.service.js';
-import { localDate } from '../../shared/utils/local-date.js';
+import { addMonths, localDate } from '../../shared/utils/local-date.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditRepository } from '../audit/audit.repository.js';
@@ -7,6 +7,8 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { JobCardRepository } from './job-card.repository.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { releaseDocumentAllocations } from '../accounting/allocation.service.js';
+import { taxLines, withRoundOff } from '../accounting/ledgers.js';
+import { isInterstate } from '../settings/company-settings.js';
 import { toNumber, roundMoney } from '../../shared/utils/numbers.js';
 import { pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
 import { IntakeLookupService, localPhone, normalizeRegistration } from './intake-lookup.service.js';
@@ -20,6 +22,8 @@ function parseListQuery(query) {
     exactMatchOnly: query.exactMatchOnly === 'true',
   };
 }
+
+const sum = (rows, value) => rows.reduce((total, row) => total + value(row), 0);
 
 function gstAmounts(revenue, gstRate, interstate = false) {
   const gstTotal = roundMoney((revenue * toNumber(gstRate)) / 100);
@@ -390,18 +394,11 @@ export class JobCardService {
       throw new AppError('Give a short reason for cancelling.', 400, 'VALIDATION_ERROR');
     }
     return this.repository.transaction(() => {
-      const runningTimer = this.db
-        .prepare(
-          'SELECT id FROM mechanic_time_entries WHERE job_card_id = ? AND stopped_at IS NULL LIMIT 1',
-        )
-        .get(jobCard.id);
-      if (runningTimer) {
-        throw new AppError(
-          'Stop the mechanic timer on this job before cancelling it.',
-          409,
-          'MECHANIC_TIMER_RUNNING',
-        );
-      }
+      this.assertNoRunningTimer(
+        jobCard.id,
+        'Stop the mechanic timer on this job before cancelling it.',
+        'MECHANIC_TIMER_RUNNING',
+      );
       this.db
         .prepare(
           "UPDATE job_cards SET status = 'CANCELLED', closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -424,19 +421,11 @@ export class JobCardService {
       const jobCard = this.getMutableJobCard(jobCardId);
       const parts = this.repository.listParts(jobCard.id);
       const labourRows = this.repository.listLabour(jobCard.id);
-      if (
-        this.db
-          .prepare(
-            'SELECT id FROM mechanic_time_entries WHERE job_card_id = ? AND stopped_at IS NULL LIMIT 1',
-          )
-          .get(jobCard.id)
-      ) {
-        throw new AppError(
-          'Stop all mechanic timers before billing this job.',
-          409,
-          'JOB_TIMER_RUNNING',
-        );
-      }
+      this.assertNoRunningTimer(
+        jobCard.id,
+        'Stop all mechanic timers before billing this job.',
+        'JOB_TIMER_RUNNING',
+      );
       const approval = this.db
         .prepare('SELECT * FROM estimate_approvals WHERE job_card_id = ? ORDER BY id DESC LIMIT 1')
         .get(jobCard.id);
@@ -465,11 +454,10 @@ export class JobCardService {
         );
       }
 
-      const companyState =
-        this.db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
-      const customerState =
-        this.repository.findCustomerById(jobCard.customer_id)?.state || companyState;
-      const interstate = customerState.trim().toLowerCase() !== companyState.trim().toLowerCase();
+      const interstate = isInterstate(
+        this.db,
+        this.repository.findCustomerById(jobCard.customer_id)?.state,
+      );
 
       const partLines = parts.map((part) => {
         const stockOut = this.inventoryService.stockOut({
@@ -542,8 +530,8 @@ export class JobCardService {
         );
       }
 
-      // Assert Customer Credit Limit (Company ID = 1 by default in job card flow)
-      this.assertCreditLimit(1, jobCard.customer_id, totals.grandTotal);
+      // Refuse a bill that takes the customer over their credit limit.
+      assertCustomerCreditLimit(this.db, 1, jobCard.customer_id, totals.grandTotal);
 
       const invoiceDate = localDate();
       const invoiceId = this.repository.createInvoice({
@@ -567,50 +555,38 @@ export class JobCardService {
         created_by: userId,
       });
 
+      const warrantyMonths = this.db.prepare(
+        'SELECT warranty_period_months FROM inventory_items WHERE id = ?',
+      );
+      const addWarranty = this.db.prepare(
+        `INSERT INTO warranty_registrations (company_id, customer_id, vehicle_id, invoice_id,
+           invoice_item_id, item_id, batch_number, start_date, end_date, status)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+      );
       for (const line of invoiceLines) {
         const invoiceItemId = this.repository.createInvoiceItem({
           ...line,
           invoice_id: invoiceId,
         });
 
-        if (line.item_type === 'PART' && line.inventory_item_id) {
-          const item = this.repository.db
-            .prepare('SELECT warranty_period_months FROM inventory_items WHERE id = ?')
-            .get(line.inventory_item_id);
-          if (item && item.warranty_period_months > 0) {
-            const start = new Date();
-            const end = new Date(start);
-            end.setMonth(start.getMonth() + Number(item.warranty_period_months));
-
-            let batchNum = null;
-            if (line.batch_id) {
-              const batch = this.repository.db
-                .prepare('SELECT batch_number FROM inventory_batches WHERE id = ?')
-                .get(line.batch_id);
-              if (batch) batchNum = batch.batch_number;
-            }
-
-            this.repository.db
-              .prepare(
-                `
-              INSERT INTO warranty_registrations (
-                company_id, customer_id, vehicle_id, invoice_id, invoice_item_id, item_id, batch_number, start_date, end_date, status
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-            `,
-              )
-              .run(
-                1,
-                jobCard.customer_id,
-                jobCard.vehicle_id,
-                invoiceId,
-                invoiceItemId,
-                line.inventory_item_id,
-                batchNum,
-                localDate(start),
-                localDate(end),
-              );
-          }
-        }
+        // Parts with a warranty period get a warranty from the bill date.
+        const months =
+          line.item_type === 'PART' && line.inventory_item_id
+            ? warrantyMonths.get(line.inventory_item_id)?.warranty_period_months
+            : 0;
+        if (months > 0)
+          addWarranty.run(
+            jobCard.customer_id,
+            jobCard.vehicle_id,
+            invoiceId,
+            invoiceItemId,
+            line.inventory_item_id,
+            line.batch_id
+              ? (this.repository.findBatchById(line.batch_id)?.batch_number ?? null)
+              : null,
+            invoiceDate,
+            addMonths(invoiceDate, months),
+          );
       }
 
       this.repository.createProfitRecord({
@@ -621,106 +597,56 @@ export class JobCardService {
         net_profit: totals.grossProfit,
       });
 
-      // 8. Post Sales Voucher & COGS Journal automatically
-      const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(1, jobCard.customer_id);
-      const partsSubtotal = partLines.reduce((sum, line) => sum + line.line_revenue, 0);
-      const labourSubtotal = labourLines.reduce((sum, line) => sum + line.line_revenue, 0);
-
-      const accountingEntries = [];
-      accountingEntries.push({
-        ledgerId: customerLedgerId,
-        type: 'DEBIT',
-        amount: totals.grandTotal,
-      });
-
-      if (partsSubtotal > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'parts_sales'),
+      // Sales voucher: the customer owes the bill; parts sales, labour sales and
+      // output GST go up. A second voucher moves the parts' cost into COGS.
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(1, key);
+      const partsSubtotal = sum(partLines, (line) => line.line_revenue);
+      const labourSubtotal = sum(labourLines, (line) => line.line_revenue);
+      const salesEntries = [
+        {
+          ledgerId: this.postingEngine.getOrCreateCustomerLedger(1, jobCard.customer_id),
+          type: 'DEBIT',
+          amount: totals.grandTotal,
+        },
+      ];
+      if (partsSubtotal > 0)
+        salesEntries.push({
+          ledgerId: ledger('parts_sales'),
           type: 'CREDIT',
           amount: partsSubtotal,
         });
-      }
-      if (labourSubtotal > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'labour_sales'),
+      if (labourSubtotal > 0)
+        salesEntries.push({
+          ledgerId: ledger('labour_sales'),
           type: 'CREDIT',
           amount: labourSubtotal,
         });
-      }
-
-      if (totals.cgst > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cgst_output'),
-          type: 'CREDIT',
-          amount: totals.cgst,
-        });
-      }
-      if (totals.sgst > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'sgst_output'),
-          type: 'CREDIT',
-          amount: totals.sgst,
-        });
-      }
-
-      if (totals.igst > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'igst_output'),
-          type: 'CREDIT',
-          amount: totals.igst,
-        });
-      }
-      const sumCredits = partsSubtotal + labourSubtotal + totals.gst;
-      const roundoff = roundMoney(totals.grandTotal - sumCredits);
-      if (Math.abs(roundoff) >= 0.01) {
-        if (roundoff > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-            type: 'CREDIT',
-            amount: roundoff,
-          });
-        } else {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-            type: 'DEBIT',
-            amount: Math.abs(roundoff),
-          });
-        }
-      }
+      salesEntries.push(...taxLines(ledger, totals, 'CREDIT', 'output'));
 
       this.postingEngine.post({
         companyId: 1,
         voucherType: 'Sales',
-        voucherDate: localDate(),
+        voucherDate: invoiceDate,
         referenceTable: 'invoices',
         referenceId: invoiceId,
         narration: `Sales invoice for Job Card ${jobCard.job_card_number}`,
         created_by: userId,
-        entries: accountingEntries,
+        entries: withRoundOff(ledger, salesEntries),
       });
 
       if (totals.cost > 0) {
-        const cogsEntries = [
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cogs'),
-            type: 'DEBIT',
-            amount: totals.cost,
-          },
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'inventory_stock'),
-            type: 'CREDIT',
-            amount: totals.cost,
-          },
-        ];
         this.postingEngine.post({
           companyId: 1,
           voucherType: 'Journal',
-          voucherDate: localDate(),
+          voucherDate: invoiceDate,
           referenceTable: 'invoices',
           referenceId: invoiceId,
           narration: `Cost of goods sold for Job Card ${jobCard.job_card_number}`,
           created_by: userId,
-          entries: cogsEntries,
+          entries: [
+            { ledgerId: ledger('cogs'), type: 'DEBIT', amount: totals.cost },
+            { ledgerId: ledger('inventory_stock'), type: 'CREDIT', amount: totals.cost },
+          ],
         });
       }
 
@@ -741,10 +667,6 @@ export class JobCardService {
         invoice,
       };
     });
-  }
-
-  assertCreditLimit(companyId, customerId, grandTotal) {
-    assertCustomerCreditLimit(this.db, companyId, customerId, grandTotal);
   }
 
   getInvoice(id) {
@@ -879,12 +801,23 @@ export class JobCardService {
     return jobCard;
   }
 
+  /** A mechanic timer still running on the job blocks billing and cancelling. */
+  assertNoRunningTimer(jobCardId, message, code) {
+    const running = this.db
+      .prepare('SELECT 1 FROM mechanic_time_entries WHERE job_card_id = ? AND stopped_at IS NULL')
+      .get(jobCardId);
+    if (running) throw new AppError(message, 409, code);
+  }
+
   calculateInvoiceTotals(lines) {
-    const revenue = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.line_revenue), 0));
-    const cost = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.line_cost), 0));
-    const cgst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.cgst_amount), 0));
-    const sgst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.sgst_amount), 0));
-    const igst = roundMoney(lines.reduce((sum, line) => sum + toNumber(line.igst_amount), 0));
+    const total = (key) => roundMoney(sum(lines, (line) => toNumber(line[key])));
+    const [revenue, cost, cgst, sgst, igst] = [
+      'line_revenue',
+      'line_cost',
+      'cgst_amount',
+      'sgst_amount',
+      'igst_amount',
+    ].map(total);
     const gst = roundMoney(cgst + sgst + igst);
 
     return {

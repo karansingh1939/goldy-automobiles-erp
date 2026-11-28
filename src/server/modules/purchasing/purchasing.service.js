@@ -6,7 +6,10 @@ import { InventoryService } from '../inventory/inventory.service.js';
 import { PurchasingRepository } from './purchasing.repository.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { toNumber, roundMoney } from '../../shared/utils/numbers.js';
-import { pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
+import { optionalDate, pageInfo, parsePaging, required } from '../../shared/utils/validation.js';
+import { taxLines, withRoundOff } from '../accounting/ledgers.js';
+import { recordSupplierLedgerEntry } from './supplier-ledger.js';
+import { isInterstate } from '../settings/company-settings.js';
 
 function lineAmounts(item) {
   const quantity = toNumber(item.quantity);
@@ -52,16 +55,7 @@ export class PurchasingService {
   }
 
   createOrder(payload, userId) {
-    required(payload.supplier_id, 'Supplier');
-    const supplier = this.repository.findSupplierById(payload.supplier_id);
-    if (!supplier) {
-      throw new AppError('Supplier was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-    }
-
-    if (!supplier.is_active) {
-      throw new AppError('Supplier is inactive.', 400, 'VALIDATION_ERROR');
-    }
-
+    const supplier = this.activeSupplier(payload.supplier_id);
     const items = this.validateItems(payload.items, { requireBatch: false });
 
     return this.repository.transaction(() => {
@@ -116,16 +110,8 @@ export class PurchasingService {
   }
 
   createReceipt(payload, userId) {
-    required(payload.supplier_id, 'Supplier');
-    const supplier = this.repository.findSupplierById(payload.supplier_id);
-    if (!supplier) {
-      throw new AppError('Supplier was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
-    }
-
-    if (!supplier.is_active) {
-      throw new AppError('Supplier is inactive.', 400, 'VALIDATION_ERROR');
-    }
-
+    const supplier = this.activeSupplier(payload.supplier_id);
+    const receiptDate = payload.receipt_date || localDate();
     const purchaseOrder = payload.purchase_order_id
       ? this.repository.findPurchaseOrderById(payload.purchase_order_id)
       : null;
@@ -144,11 +130,7 @@ export class PurchasingService {
 
     const receiptNumber =
       payload.receipt_number ||
-      nextDocumentNumber(
-        this.db,
-        DocumentSeries.GOODS_RECEIPT,
-        payload.receipt_date || localDate(),
-      );
+      nextDocumentNumber(this.db, DocumentSeries.GOODS_RECEIPT, receiptDate);
     // Spare parts rarely carry real batch numbers; when left blank, the
     // supplier bill number identifies the lot so the owner can skip the field.
     const withBatches = Array.isArray(payload.items)
@@ -165,7 +147,7 @@ export class PurchasingService {
         receipt_number: receiptNumber,
         purchase_order_id: purchaseOrder?.id || null,
         supplier_id: supplier.id,
-        receipt_date: payload.receipt_date || localDate(),
+        receipt_date: receiptDate,
         status: 'POSTED',
         notes: payload.notes || null,
         created_by: userId,
@@ -180,90 +162,41 @@ export class PurchasingService {
       });
       this.repository.updatePurchaseReceiptTotals(receiptId, totals);
 
-      // Post Purchase Voucher automatically
-      const supplierLedgerId = this.postingEngine.getOrCreateSupplierLedger(1, supplier.id);
-      const companyState =
-        this.db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
-      const interstate =
-        String(supplier.state || companyState)
-          .trim()
-          .toLowerCase() !== companyState.trim().toLowerCase();
-      const igstAmount = interstate ? totals.gst_total : 0;
-      const cgstAmount = interstate ? 0 : roundMoney(totals.gst_total / 2);
-      const sgstAmount = interstate ? 0 : roundMoney(totals.gst_total - cgstAmount);
-
-      const accountingEntries = [];
-      accountingEntries.push({
-        ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'inventory_stock'),
-        type: 'DEBIT',
-        amount: totals.subtotal,
-      });
-
-      if (cgstAmount > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'cgst_input'),
-          type: 'DEBIT',
-          amount: cgstAmount,
-        });
-      }
-      if (sgstAmount > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'sgst_input'),
-          type: 'DEBIT',
-          amount: sgstAmount,
-        });
-      }
-
-      accountingEntries.push({
-        ledgerId: supplierLedgerId,
-        type: 'CREDIT',
-        amount: totals.grand_total,
-      });
-
-      if (igstAmount > 0) {
-        accountingEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'igst_input'),
-          type: 'DEBIT',
-          amount: igstAmount,
-        });
-      }
-      // Handle Round Off
-      const sumDebits = totals.subtotal + cgstAmount + sgstAmount + igstAmount;
-      const roundoff = roundMoney(totals.grand_total - sumDebits);
-      if (Math.abs(roundoff) >= 0.01) {
-        if (roundoff > 0) {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-            type: 'DEBIT',
-            amount: roundoff,
-          });
-        } else {
-          accountingEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(1, 'round_off'),
-            type: 'CREDIT',
-            amount: Math.abs(roundoff),
-          });
-        }
-      }
-
+      // Purchase voucher: stock and input GST up, the supplier is owed the bill.
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(1, key);
+      const interstate = isInterstate(this.db, supplier.state);
+      const cgst = interstate ? 0 : roundMoney(totals.gst_total / 2);
+      const tax = {
+        cgst,
+        sgst: interstate ? 0 : roundMoney(totals.gst_total - cgst),
+        igst: interstate ? totals.gst_total : 0,
+      };
       this.postingEngine.post({
         companyId: 1,
         voucherType: 'Purchase',
-        voucherDate: payload.receipt_date || localDate(),
+        voucherDate: receiptDate,
         referenceTable: 'purchase_receipts',
         referenceId: receiptId,
         narration: `Purchase receipt from supplier: ${supplier.name}. GRN: ${payload.receipt_number || receiptId}`,
         created_by: userId,
-        entries: accountingEntries,
+        entries: withRoundOff(ledger, [
+          { ledgerId: ledger('inventory_stock'), type: 'DEBIT', amount: totals.subtotal },
+          ...taxLines(ledger, tax, 'DEBIT', 'input'),
+          {
+            ledgerId: this.postingEngine.getOrCreateSupplierLedger(1, supplier.id),
+            type: 'CREDIT',
+            amount: totals.grand_total,
+          },
+        ]),
       });
 
       if (purchaseOrder) {
         this.repository.updatePurchaseOrderStatus(purchaseOrder.id, 'RECEIVED');
       }
 
-      this.recordSupplierLedger({
+      recordSupplierLedgerEntry(this.db, {
         supplierId: supplier.id,
-        entryDate: payload.receipt_date || localDate(),
+        date: receiptDate,
         entryType: 'Purchase',
         referenceType: 'purchase_receipts',
         referenceId: receiptId,
@@ -424,30 +357,13 @@ export class PurchasingService {
     );
   }
 
-  recordSupplierLedger({
-    supplierId,
-    entryDate,
-    entryType,
-    referenceType,
-    referenceId,
-    debit,
-    credit,
-    notes,
-    userId,
-  }) {
-    const balance = roundMoney(this.repository.latestSupplierBalance(supplierId) + credit - debit);
-    this.repository.createSupplierLedger({
-      supplier_id: supplierId,
-      entry_date: entryDate,
-      entry_type: entryType,
-      reference_type: referenceType,
-      reference_id: referenceId,
-      debit: roundMoney(debit),
-      credit: roundMoney(credit),
-      balance_after: balance,
-      notes,
-      created_by: userId,
-    });
+  /** The supplier on a purchase must exist and be switched on. */
+  activeSupplier(supplierId) {
+    required(supplierId, 'Supplier');
+    const supplier = this.repository.findSupplierById(supplierId);
+    if (!supplier) throw new AppError('Supplier was not found.', 400, 'RELATED_RECORD_NOT_FOUND');
+    if (!supplier.is_active) throw new AppError('Supplier is inactive.', 400, 'VALIDATION_ERROR');
+    return supplier;
   }
 
   withPagination(result, query) {
@@ -464,19 +380,8 @@ export class PurchasingService {
 
     const parsed = parsePaging(query);
     const dates = {};
-    for (const key of ['dateFrom', 'dateTo']) {
-      if (!query[key]) continue;
-      const value = String(query[key]);
-      const date = new Date(`${value}T00:00:00.000Z`);
-      if (
-        !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-        Number.isNaN(date.getTime()) ||
-        date.toISOString().slice(0, 10) !== value
-      ) {
-        throw new AppError('Ledger date must be a valid YYYY-MM-DD date.', 400, 'VALIDATION_ERROR');
-      }
-      dates[key] = value;
-    }
+    for (const key of ['dateFrom', 'dateTo'])
+      if (query[key]) dates[key] = optionalDate(query[key], 'Ledger date');
     if (dates.dateFrom && dates.dateTo && dates.dateFrom > dates.dateTo) {
       throw new AppError('Date range is invalid.', 400, 'VALIDATION_ERROR');
     }

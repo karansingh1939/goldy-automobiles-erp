@@ -167,6 +167,17 @@ export function stateCodeFor(state) {
   return match ? String(match[0]).padStart(2, '0') : null;
 }
 
+/** True when a customer or supplier is in another state than the workshop (IGST instead of CGST + SGST). */
+export function isInterstate(db, partyState) {
+  const companyState =
+    db.prepare('SELECT state FROM companies WHERE id = 1').get()?.state || 'Haryana';
+  return (
+    String(partyState || companyState)
+      .trim()
+      .toLowerCase() !== companyState.trim().toLowerCase()
+  );
+}
+
 export function createCompanySettingsRouter(db) {
   const router = Router();
   const service = new CompanySettingsService(db);

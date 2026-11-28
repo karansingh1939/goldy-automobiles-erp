@@ -94,13 +94,14 @@ Refuses requests that do not come to a loopback host name (protects against DNS 
 
 - `localHostGuard` — Rejects requests whose Host header is not a loopback name. The API listens on 127.0.0.1 only, but a web page open in a browser on the same laptop could rebind its own domain to 127.0.0.1 (DNS rebindin
 
-### `src/server/shared/utils/document-number.js` (58 lines)
+### `src/server/shared/utils/document-number.js` (73 lines)
 
 Short consecutive numbers per financial year: INV/26-27/0001 (GST Rule 46, max 16 characters) and JC, CS, CN, DN, PO, GRN, WC, SC, MV, ADJ, OPN.
 
 - `financialYearLabel` — GST-compliant document numbering. Rule 46 of the CGST Rules requires tax invoice numbers that are consecutive, unique for a financial year (April to March) and at most 16 characters. Numbers look like
 - `short` — Short.
 - `nextDocumentNumber` — Reserves the next number in a series for the date's financial year, inside the caller's transaction (a rollback frees it).
+- `nextYearlyNumber` — Next number in a simple yearly series such as REC-2026-000001 (receipts and supplier payments, which are not GST documents).
 
 ### `src/server/shared/utils/local-date.js` (31 lines)
 
@@ -287,14 +288,16 @@ Loads the starter catalogue of common parts on a new install (not in tests).
 
 ## Server: feature modules
 
-### `src/server/modules/accounting/accounting-report.service.js` (390 lines)
+### `src/server/modules/accounting/accounting-report.service.js` (295 lines)
 
 Trial balance, profit and loss and balance sheet from the journal.
 
-- `AccountingReportService` (class) — Trial balance, profit and loss, balance sheet, and the ledger and voucher lists. Executes balance aggregation directly from database journals.
+- `requireDates` — Trial balance, profit and loss, balance sheet, and the ledger and voucher lists. Executes balance aggregation directly from database journals.
+- `AccountingReportService` (class) — Accounting report service.
 - `listLedgers` — Every ledger with its group name, A to Z.
 - `listVouchers` — Vouchers, newest first, filtered by date range, type and number/narration text.
-- `getTrialBalance` — Generates a Trial Balance as of a specific date.
+- `ledgerBalances` — Each ledger's debits, credits and balance (in its own direction: a debit ledger counts debits as plus) from the opening balance up to a date.
+- `getTrialBalance` — Trial balance as of a date: every ledger's balance on the debit or credit side.
 - `getProfitLoss` — Generates a Profit & Loss statement for a date range.
 - `getBalanceSheet` — Generates a Balance Sheet as of a specific date.
 
@@ -304,24 +307,25 @@ Accounting API: receivables, daily cash, money accounts and entries, refunds, op
 
 - `createAccountingRouter` — Create accounting router.
 
-### `src/server/modules/accounting/allocation.service.js` (421 lines)
+### `src/server/modules/accounting/allocation.service.js` (346 lines)
 
 Matches payments to bills (oldest first or named bills), undoes matches, and releases payments as advance when a bill is cancelled.
 
+- `paymentKind` — Payment kind.
 - `releaseDocumentAllocations` — Unlinks every customer payment from one bill that is being cancelled. The money stays on each receipt as unused (an advance the customer has with us), which is what really happened: the cash was recei
-- `AllocationService` (class) — Service to manage invoice/bill matching and payment allocations polymorphically. Supports both CUSTOMER and SUPPLIER modes.
-- `allocateReceiptFIFO` — Uses a customer receipt to pay their oldest unpaid bills first.
+- `AllocationService` (class) — Matches customer receipts and supplier payments to the bills they pay.
 - `allocateReceiptManual` — Uses a customer receipt to pay the bills named by the caller.
-- `cancelReceiptAllocations` — Unmatches a receipt from every bill it paid.
 - `getOutstanding` — Unpaid bills of a customer (job card and counter bills) or of a supplier, oldest first.
 - `allocateFIFO` — Matches a payment to the oldest unpaid bills of the party.
 - `allocateManual` — Matches a payment to named bills, in its own transaction.
 - `allocateManualTransaction` — Matches a payment to named bills; refuses more than the unused amount or a cancelled bill, and updates each bill's paid amount and status.
 - `cancelAllocations` — Unmatches a payment from all its bills and puts their paid amounts back.
+- `document` — A bill with its total (job card invoices net of completed returns) and amount paid.
+- `setPaid` — Saves a bill's new amount paid with its PAID / partly paid / UNPAID state.
 - `invoiceNetTotal` — Bill total minus completed customer returns.
 - `reconcileInvoiceCredits` — After a return, frees any payment that is now more than the reduced bill.
 
-### `src/server/modules/accounting/customer-credit.repository.js` (26 lines)
+### `src/server/modules/accounting/customer-credit.repository.js` (28 lines)
 
 Reads a customer's credit limit and what they owe.
 
@@ -335,7 +339,7 @@ Refuses a credit bill that would take a customer over their credit limit.
 
 - `assertCustomerCreditLimit` — Refuses a credit bill that would take the customer past their credit limit.
 
-### `src/server/modules/accounting/customer-receipt.service.js` (216 lines)
+### `src/server/modules/accounting/customer-receipt.service.js` (192 lines)
 
 Money received from customers: receipt voucher, matching to bills, cancelling a receipt.
 
@@ -344,35 +348,41 @@ Money received from customers: receipt voucher, matching to bills, cancelling a 
 - `cancelReceipt` — Cancels a receipt: unmatches it from bills and reverses its voucher.
 - `allocateReceiptManual` — Manually allocates a receipt balance to outstanding invoices.
 
-### `src/server/modules/accounting/direct-billing.service.js` (541 lines)
+### `src/server/modules/accounting/direct-billing.service.js` (443 lines)
 
 Counter sale bills (CS/26-27/0001): stock out at weighted cost, GST split, sales and cost vouchers, walk-in customer, cancellation with stock back.
 
+- `sumQuantity` — Sum quantity.
 - `DirectBillingService` (class) — Service to manage direct (non-job-card) counter billing.
 - `deductStock` — Takes counter-sale stock out of the godown batch by batch and returns its weighted cost.
 - `walkInCustomerId` — The shared customer record used for walk-in counter sales without a name.
 - `listDirectInvoices` — Latest 200 counter bills, optionally for one customer or status.
 - `getDirectInvoice` — One counter bill with its lines.
 - `createDirectInvoice` — Makes a counter-sale bill: number, stock out, GST split (CGST/SGST or IGST), credit limit check, sales and cost-of-goods vouchers.
+- `ledger` — Sales voucher (the bill is rounded to whole rupees; round-off takes the difference), then the parts' cost moves from stock into COGS.
 - `cancelDirectInvoice` — Cancels a counter bill: stock back to its batches, vouchers reversed, any payment kept as the customer's advance.
 
-### `src/server/modules/accounting/ledger-resolver.service.js` (68 lines)
+### `src/server/modules/accounting/ledger-resolver.service.js` (56 lines)
 
 Finds ledger ids by their fixed system key (cash_in_hand, inventory_stock ...) with a cache.
 
 - `LedgerResolverService` (class) — Service to resolve database ledger IDs and records from permanent immutable system keys. Caches resolved keys in memory to minimize SQL query overhead during batch postings.
-- `getLedgerId` — Resolves the ledger ID for a given company and system key. Uses cached results or queries and caches the lookup on cache miss (lazy loading).
+- `getLedgerId` — Get ledger id.
 - `getSystemLedger` — Resolves the entire ledger row for a given company and system key.
 
-### `src/server/modules/accounting/ledgers.js` (78 lines)
+### `src/server/modules/accounting/ledgers.js` (122 lines)
 
 Creating ledgers in one place: system accounts made on first use, and picking the cash or bank ledger for a payment.
 
 - `insertLedger` — Account groups seeded by migration 024. */ export const LedgerGroup = Object.freeze({ CURRENT_ASSETS: 2, FIXED_ASSETS: 3, CURRENT_LIABILITIES: 5, NON_CURRENT_LIABILITIES: 6, INDIRECT_INCOME: 10, }); S
 - `systemLedgerId` — A system ledger by its key, created on first use for the on-demand ones.
 - `cashOrBankLedgerId` — The ledger money leaves from or arrives in: Cash, or a bank account (the chosen one, or the only one when there is just one).
+- `sum` — Sum.
+- `taxLines` — CGST, SGST and IGST voucher lines from { cgst, sgst, igst } totals, zeros left out. kind is 'output' (tax on sales) or 'input' (tax on purchases).
+- `withRoundOff` — Adds a round-off line when paise rounding leaves debits and credits apart.
+- `receivingLedgerId` — Cash for paymentMode CASH; otherwise the bank ledger the screen chose, which must exist.
 
-### `src/server/modules/accounting/money.service.js` (419 lines)
+### `src/server/modules/accounting/money.service.js` (421 lines)
 
 Money In / Out in plain words: cash and banks, other money in/out, customer refunds, last entries with cancel, opening balances from old books.
 
@@ -398,7 +408,7 @@ Indian financial years (April-March): creates years as needed and refuses postin
 - `findYear` — 2. Validate Financial Year boundary status
 - `ensureFinancialYear` — Creates financial years up to the one containing the date.
 
-### `src/server/modules/accounting/posting-engine.service.js` (399 lines)
+### `src/server/modules/accounting/posting-engine.service.js` (375 lines)
 
 The double-entry engine: every voucher must balance, gets a number and running balances; vouchers are reversed, never deleted; customer and supplier ledgers are created on demand.
 
@@ -412,19 +422,20 @@ The double-entry engine: every voucher must balance, gets a number and running b
 - `getOrCreateSupplierLedger` — The supplier's own ledger, created on first use.
 - `partyLedger` — Reuses the party's ledger (or one with the same name) or creates it, and links it.
 
-### `src/server/modules/accounting/reconciliation.service.js` (328 lines)
+### `src/server/modules/accounting/reconciliation.service.js` (222 lines)
 
 Admin check that ledgers, allocations, trial balance, stock and return limits agree, with a repair for running balances.
 
-- `ReconciliationService` (class) — Service to execute system-wide data integrity and accounting checks. Detects discrepancies between document statuses, ledger balances, and allocation audit trails.
-- `runReconciliation` — Run all reconciliation checks.
-- `checkLedgerBalances` — Verifies that cached ledger_balances match the sum of detailed journal entries.
-- `checkAllocationIntegrity` — Verifies that customer receipts and invoice amount_paid figures match receipt_allocations entries, and verifies that supplier payments and purchase_bill amount_paid figures match supplier_allocations.
-- `checkTrialBalanceBalanced` — Verifies that the net sum of all ledgers is 0 (double-entry Trial Balance balance checks).
-- `checkInventoryStockIntegrity` — Check inventory stock integrity.
-- `checkReturnLimitsIntegrity` — Check return limits integrity.
+- `check` — Check.
+- `ReconciliationService` (class) — Integrity check of the books: cached ledger balances, payment matching, stock totals, return quantities and the trial balance. Each check is one query over all rows.
+- `runReconciliation` — Run reconciliation.
+- `checkLedgerBalances` — Cached ledger_balances must equal the opening balance plus the journal entries.
+- `checkAllocationIntegrity` — Receipts, payments and bills must agree with their allocation rows.
+- `checkTrialBalanceBalanced` — All debits must equal all credits.
+- `checkInventoryStockIntegrity` — Each item's stored quantity must equal the sum of its batches.
+- `checkReturnLimitsIntegrity` — No invoice line may be returned more times than it was sold.
 
-### `src/server/modules/accounting/supplier-payment.service.js` (278 lines)
+### `src/server/modules/accounting/supplier-payment.service.js` (244 lines)
 
 Payments to suppliers: payment voucher, Supplier Ledger row, cancelling a payment.
 
@@ -434,13 +445,12 @@ Payments to suppliers: payment voucher, Supplier Ledger row, cancelling a paymen
 - `getPayment` — Retrieves a single supplier payment details.
 - `cancelPayment` — Cancels a supplier payment: voucher reversed, matches undone, Supplier Ledger amount added back.
 
-### `src/server/modules/accounting/voucher-number.service.js` (98 lines)
+### `src/server/modules/accounting/voucher-number.service.js` (60 lines)
 
 Sequential voucher numbers per type and year (SAL-, PUR-, REC-, PAY-, JRN-).
 
-- `VoucherNumberService` (class) — Service to generate unique, sequential voucher numbers for specific companies, voucher types, and dates.
+- `VoucherNumberService` (class) — Voucher numbers per type and calendar year: SAL-2026-000001.
 - `getNextVoucherNumber` — Generates the next sequential unique voucher number (e.g. SAL-2026-000001).
-- `getPrefixForType` — Translates voucher types to code prefixes.
 
 ### `src/server/modules/accounting/workshop-finance.repository.js` (64 lines)
 
@@ -454,12 +464,13 @@ Queries for unpaid bills, customer balances, the cash book and cash counts.
 - `counts` — Counts.
 - `saveCount` — Save count.
 
-### `src/server/modules/accounting/workshop-finance.service.js` (146 lines)
+### `src/server/modules/accounting/workshop-finance.service.js` (135 lines)
 
 Dues & Daily Cash: who owes money and for how long, and the daily cash count.
 
 - `WorkshopFinanceService` (class) — Workshop finance service.
 - `ageing` — Unpaid bills grouped by days unpaid, and each customer's balance or advance.
+- `customerOf` — Customer of.
 - `validateDate` — Validate date.
 - `cashSummary` — Cash summary.
 - `saveCount` — Saves a cash count with the book balance at that moment; no accounting change.
@@ -594,10 +605,11 @@ Daily/weekly/hourly automatic backups, catch-up after the laptop was off, retrie
 - `runScheduledBackup` — Run scheduled backup.
 - `recordAutoError` — Record auto error.
 
-### `src/server/modules/backup/backup.service.js` (423 lines)
+### `src/server/modules/backup/backup.service.js` (383 lines)
 
 Manual and automatic backups, copy to an external/USB folder, verification, retention and the health warnings shown on Home.
 
+- `yesNo` — Yes no.
 - `BackupService` (class) — Backup service.
 - `backupDatabase` — Makes a backup copy, verifies it, logs it and copies it to the external folder if one is set.
 - `list` — List.
@@ -749,14 +761,17 @@ GST report API handlers.
 
 - `GstController` (class) — Gst controller.
 
-### `src/server/modules/gst/gst.repository.js` (392 lines)
+### `src/server/modules/gst/gst.repository.js` (325 lines)
 
 GST queries: outward supplies by line, credit notes, input tax, HSN/SAC totals.
 
 - `buildWhereClause` — Build where clause.
+- `dateRange` — "AND column between the dates" conditions with named parameters.
+- `addUp` — Adds up the given number columns of rows grouped by a key.
 - `GstRepository` (class) — Gst repository.
 - `customerCreditNotes` — Customer credit notes.
 - `summary` — Summarizes all outward output GST and inward input GST (ITC).
+- `totals` — Totals.
 - `creditTotal` — Credit total.
 - `gstr1Dataset` — Compiles outward tax invoice line details for GSTR-1 preparation.
 - `gstr3bDataset` — Compiles GSTR-3B tax details combining Outward Supplies and Eligible Input Tax Credit (ITC).
@@ -769,14 +784,12 @@ GST routes: summary, GSTR-1, GSTR-3B, HSN and the GSTR-1 CSV files.
 
 - `createGstRouter` — Create gst router.
 
-### `src/server/modules/gst/gst.service.js` (139 lines)
+### `src/server/modules/gst/gst.service.js` (63 lines)
 
 Period handling and shaping of GST summary, GSTR-1, GSTR-3B and HSN reports.
 
-- `mapSummaryRow` — Map summary row.
-- `mapGstr1Row` — Map gstr1 row.
-- `mapGstr3bDataset` — Map gstr3b dataset.
-- `mapHsnRow` — Map hsn row.
+- `camel` — Camel.
+- `present` — The same data with camelCase names and every number rounded to paise.
 - `GstService` (class) — Gst service.
 - `summary` — Output GST totals (taxable, CGST, SGST, IGST) for a period.
 - `gstr1` — Gstr1.
@@ -920,7 +933,7 @@ Job card and workshop bill API handlers.
 
 - `JobCardController` (class) — Job card controller.
 
-### `src/server/modules/job-cards/job-card.repository.js` (658 lines)
+### `src/server/modules/job-cards/job-card.repository.js` (557 lines)
 
 Job cards, their parts and labour, invoices and profit records in the database.
 
@@ -931,7 +944,8 @@ Job cards, their parts and labour, invoices and profit records in the database.
 - `findUserById` — Find user by id.
 - `findInventoryItemById` — Find inventory item by id.
 - `findBatchById` — Find batch by id.
-- `listJobCards` — List job cards.
+- `listJobCards` — Job cards for the list, newest first. A search first looks for an exact job card number, car number, phone or customer name (the kind it looks like first); with no exact match it searches parts of tho
+- `countAll` — Count all.
 - `findJobCardById` — Find job card by id.
 - `findTechnicianById` — Find technician by id.
 - `createJobCard` — Create job card.
@@ -956,11 +970,12 @@ Job card, bill and vehicle-intake routes.
 
 - `createJobCardRouter` — Create job card router.
 
-### `src/server/modules/job-cards/job-card.service.js` (906 lines)
+### `src/server/modules/job-cards/job-card.service.js` (839 lines)
 
 Job cards from intake to bill: find or create customer and car, add/remove parts and labour, make the GST bill (INV/26-27/0001) with stock out and vouchers, cancel a job or a bill (stock back, payment kept as advance).
 
 - `parseListQuery` — Parse list query.
+- `sum` — Sum.
 - `gstAmounts` — Gst amounts.
 - `JobCardService` (class) — Job card service.
 - `list` — List.
@@ -973,11 +988,13 @@ Job cards from intake to bill: find or create customer and car, add/remove parts
 - `removeLine` — Removes a wrong part or labour line from an open job card.
 - `cancelJobCard` — Cancels an open job card without a bill (a reason is required).
 - `finalize` — Makes the GST bill (INV/26-27/0001): stock out, GST split, profit record, sales and cost vouchers, warranties.
-- `assertCreditLimit` — Assert credit limit.
+- `ledger` — Sales voucher: the customer owes the bill; parts sales, labour sales and output GST go up. A second voucher moves the parts' cost into COGS.
 - `getInvoice` — A bill with its lines and the odometer reading.
 - `cancelInvoice` — Cancels a bill: stock back, vouchers and profit reversed, payment kept as advance, job card cancelled.
 - `getMutableJobCard` — Get mutable job card.
+- `assertNoRunningTimer` — A mechanic timer still running on the job blocks billing and cancelling.
 - `calculateInvoiceTotals` — Revenue, cost, GST and profit totals of the bill lines.
+- `total` — Total.
 - `createJobCardService` — Create job card service.
 
 ### `src/server/modules/masters/master.config.js` (267 lines)
@@ -1072,7 +1089,7 @@ Buy Stock API handlers.
 
 - `PurchasingController` (class) — Purchasing controller.
 
-### `src/server/modules/purchasing/purchasing.repository.js` (398 lines)
+### `src/server/modules/purchasing/purchasing.repository.js` (267 lines)
 
 Purchase orders, supplier bills (receipts), their lines and the supplier ledger in the database.
 
@@ -1093,8 +1110,10 @@ Purchase orders, supplier bills (receipts), their lines and the supplier ledger 
 - `createPurchaseReceipt` — Create purchase receipt.
 - `updatePurchaseReceiptTotals` — Update purchase receipt totals.
 - `listPurchaseItemsByReceiptId` — List purchase items by receipt id.
-- `latestSupplierBalance` — Latest supplier balance.
-- `createSupplierLedger` — Create supplier ledger.
+- `findDocument` — Purchase orders and supplier bills (receipts) share these queries.
+- `listDocuments` — Newest first, searching the document number and supplier name.
+- `updateTotals` — Update totals.
+- `listItems` — List items.
 - `listSupplierLedger` — List supplier ledger.
 
 ### `src/server/modules/purchasing/purchasing.routes.js` (30 lines)
@@ -1103,7 +1122,7 @@ Buy Stock and Supplier Ledger routes.
 
 - `createPurchasingRouter` — Create purchasing router.
 
-### `src/server/modules/purchasing/purchasing.service.js` (496 lines)
+### `src/server/modules/purchasing/purchasing.service.js` (401 lines)
 
 Purchase orders and supplier bills: stock in at cost, new selling price, input GST and purchase voucher, Supplier Ledger row.
 
@@ -1115,10 +1134,11 @@ Purchase orders and supplier bills: stock in at cost, new selling price, input G
 - `listReceipts` — List receipts.
 - `getReceipt` — Get receipt.
 - `createReceipt` — Enters a supplier bill: stock in per line, purchase voucher with input GST, Supplier Ledger row, order marked received.
+- `ledger` — Purchase voucher: stock and input GST up, the supplier is owed the bill.
 - `validateItems` — Checks each bill line (item, godown, quantity, cost, price, GST).
 - `applyNewSellingPrice` — A new selling price typed on a supplier bill becomes the item price (audited).
 - `createPurchaseItems` — Saves bill lines, puts their stock in and returns the bill totals.
-- `recordSupplierLedger` — Record supplier ledger.
+- `activeSupplier` — The supplier on a purchase must exist and be switched on.
 - `withPagination` — With pagination.
 - `getSupplierLedger` — Supplier Ledger rows with readable bill, payment and return numbers.
 - `createPurchasingService` — Create purchasing service.
@@ -1145,12 +1165,15 @@ Returns API handlers.
 
 - `ReturnsController` (class) — Returns controller.
 
-### `src/server/modules/returns/returns.repository.js` (437 lines)
+### `src/server/modules/returns/returns.repository.js` (404 lines)
 
 Customer and supplier returns and their lines in the database.
 
 - `ReturnsRepository` (class) — Returns repository.
 - `transaction` — Transaction.
+- `findReturn` — A return with its lines (item, godown and batch names); null when missing.
+- `listReturns` — Returns of one kind, newest first, filtered by the conditions given.
+- `updateReturn` — Saves the given columns of a return and reads it back.
 - `createCustomerReturn` — CUSTOMER RETURNS
 - `createCustomerReturnItem` — Create customer return item.
 - `findCustomerReturnById` — Find customer return by id.
@@ -1173,13 +1196,16 @@ Returns routes.
 
 - `createReturnsRouter` — Create returns router.
 
-### `src/server/modules/returns/returns.service.js` (681 lines)
+### `src/server/modules/returns/returns.service.js` (547 lines)
 
 Customer returns (credit note CN/..: stock back if good, GST and profit reversed) and supplier returns (debit note DN/..: stock out, supplier owed less).
 
+- `sum` — Sum.
+- `taxTotals` — Tax totals.
 - `ReturnsService` (class) — Returns service.
 - `createCustomerReturn` — Drafts a customer return (credit note CN/..) for parts on a bill, never more than sold.
 - `completeCustomerReturn` — Approves it: good parts back to stock, damaged written off, GST and profit reversed, credit note voucher.
+- `ledger` — 1. Good parts go back into stock at the cost they were sold at.
 - `cancelCustomerReturn` — Cancels a draft customer return.
 - `createSupplierReturn` — Drafts a return to a supplier (debit note DN/..) from a supplier bill line.
 - `completeSupplierReturn` — Approves it: stock out, input GST reversed, debit note voucher, Supplier Ledger lowered.
@@ -1216,7 +1242,7 @@ Builds a car's full service history with totals.
 - `getVehicleServiceHistory` — Generates the complete maintenance history timeline for a single vehicle.
 - `createServiceHistoryService` — Service instantiation helper
 
-### `src/server/modules/settings/company-settings.js` (194 lines)
+### `src/server/modules/settings/company-settings.js` (205 lines)
 
 Company details printed on bills (name, address, phones, GSTIN, state and terms), GST state codes and GSTIN checks.
 
@@ -1227,6 +1253,7 @@ Company details printed on bills (name, address, phones, GSTIN, state and terms)
 - `clean` — Clean.
 - `fail` — Fail.
 - `stateCodeFor` — State code for.
+- `isInterstate` — True when a customer or supplier is in another state than the workshop (IGST instead of CGST + SGST).
 - `createCompanySettingsRouter` — Create company settings router.
 
 ### `src/server/modules/staff-pay/staff-pay.routes.js` (34 lines)

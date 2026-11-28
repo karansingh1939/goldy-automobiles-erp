@@ -6,6 +6,15 @@ import { ReturnsRepository } from './returns.repository.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { AccountingPostingEngine } from '../accounting/posting-engine.service.js';
 import { AllocationService } from '../accounting/allocation.service.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
+import { taxLines, withRoundOff } from '../accounting/ledgers.js';
+
+const sum = (rows, value) => rows.reduce((total, row) => total + value(row), 0);
+const taxTotals = (items) => ({
+  cgst: sum(items, (item) => item.cgst_amount || 0),
+  sgst: sum(items, (item) => item.sgst_amount || 0),
+  igst: sum(items, (item) => item.igst_amount || 0),
+});
 
 export class ReturnsService {
   constructor(db) {
@@ -84,11 +93,11 @@ export class ReturnsService {
           throw new AppError('Return condition must be GOOD or DAMAGED.', 400, 'VALIDATION_ERROR');
         }
         const ratio = quantity / Number(invItem.quantity);
-        const cgstAmount = Math.round(Number(invItem.cgst_amount) * ratio * 100) / 100;
-        const sgstAmount = Math.round(Number(invItem.sgst_amount) * ratio * 100) / 100;
-        const igstAmount = Math.round(Number(invItem.igst_amount) * ratio * 100) / 100;
+        const cgstAmount = roundMoney(Number(invItem.cgst_amount) * ratio);
+        const sgstAmount = roundMoney(Number(invItem.sgst_amount) * ratio);
+        const igstAmount = roundMoney(Number(invItem.igst_amount) * ratio);
         const gstAmount = cgstAmount + sgstAmount + igstAmount;
-        const lineTotal = Math.round(Number(invItem.line_total) * ratio * 100) / 100;
+        const lineTotal = roundMoney(Number(invItem.line_total) * ratio);
 
         totalRefundAmount += lineTotal;
 
@@ -156,14 +165,10 @@ export class ReturnsService {
         );
       }
 
-      // 1. Process Stock Inflows (Reverse Logistics)
-      for (const item of ret.items) {
+      // 1. Good parts go back into stock at the cost they were sold at.
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(companyId, key);
+      const lines = ret.items.map((item) => {
         this.inventoryService.assertWarehousePermission(userId, item.warehouse_id);
-        // Look up batch details
-        const batch = this.db
-          .prepare('SELECT batch_number, purchase_cost FROM inventory_batches WHERE id = ?')
-          .get(item.batch_id);
-        const batchNum = batch ? batch.batch_number : `B-${Date.now()}`;
         const invItem = this.repository.findInvoiceItem(
           ret.invoice_id,
           item.item_id,
@@ -177,13 +182,12 @@ export class ReturnsService {
             'RETURN_LINE_MISSING',
           );
         const unitCost = Number(invItem.purchase_cost_snapshot);
-
         if (item.condition === 'GOOD') {
-          // Put back in stock and preserve FIFO history
+          const batch = this.inventoryService.repository.findBatchById(item.batch_id);
           this.inventoryService.stockIn({
             itemId: item.item_id,
             warehouseId: item.warehouse_id,
-            batchNumber: batchNum,
+            batchNumber: batch ? batch.batch_number : `B-${Date.now()}`,
             quantity: item.quantity,
             unitCost,
             transactionType: 'Return',
@@ -192,69 +196,23 @@ export class ReturnsService {
             userId,
           });
         }
-      }
+        return { item, unitCost };
+      });
 
-      // 2. Post Accounting Credit Note
-      const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(
-        companyId,
-        ret.customer_id,
-      );
-      const salesLedgerId = this.postingEngine.ledgerResolver.getLedgerId(companyId, 'parts_sales');
-
-      let totalTaxable = 0;
-      let totalCgst = 0;
-      let totalSgst = 0;
-      let totalIgst = 0;
-
-      for (const item of ret.items) {
-        totalTaxable += item.line_total - item.gst_amount;
-        totalCgst += item.cgst_amount || 0;
-        totalSgst += item.sgst_amount || 0;
-        totalIgst += item.igst_amount || 0;
-      }
-
+      // 2. Credit note: the customer is owed the refund; sales and output GST go down.
       const entries = [
         {
-          ledgerId: customerLedgerId,
+          ledgerId: this.postingEngine.getOrCreateCustomerLedger(companyId, ret.customer_id),
           type: 'CREDIT',
-          amount: Math.round(ret.total_refund_amount * 100) / 100,
+          amount: roundMoney(ret.total_refund_amount),
         },
-        { ledgerId: salesLedgerId, type: 'DEBIT', amount: Math.round(totalTaxable * 100) / 100 },
+        {
+          ledgerId: ledger('parts_sales'),
+          type: 'DEBIT',
+          amount: roundMoney(sum(ret.items, (item) => item.line_total - item.gst_amount)),
+        },
+        ...taxLines(ledger, taxTotals(ret.items), 'DEBIT', 'output'),
       ];
-
-      if (totalCgst > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cgst_output'),
-          type: 'DEBIT',
-          amount: Math.round(totalCgst * 100) / 100,
-        });
-      }
-      if (totalSgst > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'sgst_output'),
-          type: 'DEBIT',
-          amount: Math.round(totalSgst * 100) / 100,
-        });
-      }
-      if (totalIgst > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'igst_output'),
-          type: 'DEBIT',
-          amount: Math.round(totalIgst * 100) / 100,
-        });
-      }
-
-      // Balance check & adjustment (if rounding discrepancy exists)
-      const debits = entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.amount, 0);
-      const credits = entries.filter((e) => e.type === 'CREDIT').reduce((s, e) => s + e.amount, 0);
-      const diff = Math.round((credits - debits) * 100) / 100;
-      if (Math.abs(diff) > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'round_off'),
-          type: diff > 0 ? 'DEBIT' : 'CREDIT',
-          amount: Math.abs(diff),
-        });
-      }
 
       const voucher = this.postingEngine.post({
         companyId,
@@ -264,65 +222,33 @@ export class ReturnsService {
         referenceId: ret.id,
         narration: `Credit Note for customer return ${ret.return_number}`,
         created_by: userId,
-        entries,
+        entries: withRoundOff(ledger, entries),
       });
 
-      // 3. Reverse Cost of Goods Sold (COGS)
-      const cogsLedgerId = this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cogs');
-      const inventoryLedgerId = this.postingEngine.ledgerResolver.getLedgerId(
-        companyId,
-        'inventory_stock',
-      );
-
-      for (const item of ret.items) {
-        const invItem = this.repository.findInvoiceItem(
-          ret.invoice_id,
-          item.item_id,
-          item.invoice_item_id,
-          item.batch_id,
-        );
-        const unitCost = Number(invItem.purchase_cost_snapshot);
-        const totalCost = Math.round(unitCost * item.quantity * 100) / 100;
-
+      // 3. Reverse the cost of goods sold: back into stock if good, a loss if damaged.
+      for (const { item, unitCost } of lines) {
+        const totalCost = roundMoney(unitCost * item.quantity);
         if (totalCost <= 0) continue;
-
-        if (item.condition === 'GOOD') {
-          // Debit Inventory Stock, Credit COGS
-          this.postingEngine.post({
-            companyId,
-            voucherType: 'Journal',
-            voucherDate: ret.return_date,
-            referenceTable: 'customer_returns',
-            referenceId: ret.id,
-            narration: `COGS Reversal for returned item SKU ${item.sku}`,
-            created_by: userId,
-            entries: [
-              { ledgerId: inventoryLedgerId, type: 'DEBIT', amount: totalCost },
-              { ledgerId: cogsLedgerId, type: 'CREDIT', amount: totalCost },
-            ],
-          });
-        } else {
-          // If DAMAGED, write off the value:
-          // We still reverse COGS to reduce Cost of Goods Sold
-          // but debit Damaged Stock Loss instead of Inventory Stock!
-          const damagedLedgerId = this.postingEngine.ledgerResolver.getLedgerId(
-            companyId,
-            'damaged_stock_loss',
-          );
-          this.postingEngine.post({
-            companyId,
-            voucherType: 'Journal',
-            voucherDate: ret.return_date,
-            referenceTable: 'customer_returns',
-            referenceId: ret.id,
-            narration: `Write-off for damaged returned item SKU ${item.sku}`,
-            created_by: userId,
-            entries: [
-              { ledgerId: damagedLedgerId, type: 'DEBIT', amount: totalCost },
-              { ledgerId: cogsLedgerId, type: 'CREDIT', amount: totalCost },
-            ],
-          });
-        }
+        const good = item.condition === 'GOOD';
+        this.postingEngine.post({
+          companyId,
+          voucherType: 'Journal',
+          voucherDate: ret.return_date,
+          referenceTable: 'customer_returns',
+          referenceId: ret.id,
+          narration: good
+            ? `COGS Reversal for returned item SKU ${item.sku}`
+            : `Write-off for damaged returned item SKU ${item.sku}`,
+          created_by: userId,
+          entries: [
+            {
+              ledgerId: ledger(good ? 'inventory_stock' : 'damaged_stock_loss'),
+              type: 'DEBIT',
+              amount: totalCost,
+            },
+            { ledgerId: ledger('cogs'), type: 'CREDIT', amount: totalCost },
+          ],
+        });
       }
 
       const completed = this.repository.updateCustomerReturn(ret.id, {
@@ -421,12 +347,11 @@ export class ReturnsService {
         const gstRate = Number(source.gst_rate);
 
         // Calculate tax input reversal
-        const taxable = Math.round(unitCost * quantity * 100) / 100;
-        const gstAmount =
-          Math.round(((source.gst_amount * quantity) / source.quantity) * 100) / 100;
-        const cgstAmount = source.interstate ? 0 : Math.round((gstAmount / 2) * 100) / 100;
-        const sgstAmount = source.interstate ? 0 : Math.round((gstAmount - cgstAmount) * 100) / 100;
-        const lineTotal = Math.round((taxable + gstAmount) * 100) / 100;
+        const taxable = roundMoney(unitCost * quantity);
+        const gstAmount = roundMoney((source.gst_amount * quantity) / source.quantity);
+        const cgstAmount = source.interstate ? 0 : roundMoney(gstAmount / 2);
+        const sgstAmount = source.interstate ? 0 : roundMoney(gstAmount - cgstAmount);
+        const lineTotal = roundMoney(taxable + gstAmount);
 
         totalRefundAmount += lineTotal;
 
@@ -503,8 +428,7 @@ export class ReturnsService {
             'VALIDATION_ERROR',
           );
         }
-        const expectedGst =
-          Math.round(((source.gst_amount * item.quantity) / source.quantity) * 100) / 100;
+        const expectedGst = roundMoney((source.gst_amount * item.quantity) / source.quantity);
         if (
           Math.abs(item.unit_cost - source.purchase_cost) > 0.005 ||
           Math.abs(item.gst_amount - expectedGst) > 0.005
@@ -517,10 +441,8 @@ export class ReturnsService {
         }
         if (item.cgst_amount === null || item.sgst_amount === null || item.igst_amount === null) {
           item.igst_amount = source.interstate ? item.gst_amount : 0;
-          item.cgst_amount = source.interstate ? 0 : Math.round((item.gst_amount / 2) * 100) / 100;
-          item.sgst_amount = source.interstate
-            ? 0
-            : Math.round((item.gst_amount - item.cgst_amount) * 100) / 100;
+          item.cgst_amount = source.interstate ? 0 : roundMoney(item.gst_amount / 2);
+          item.sgst_amount = source.interstate ? 0 : roundMoney(item.gst_amount - item.cgst_amount);
           this.db
             .prepare(
               'UPDATE supplier_return_items SET source_table=?,source_item_id=?,cgst_amount=?,sgst_amount=?,igst_amount=? WHERE id=?',
@@ -549,86 +471,30 @@ export class ReturnsService {
           referenceId: ret.id,
           userId,
         });
-        inventoryValue += Math.round(movement.unitCost * item.quantity * 100) / 100;
+        inventoryValue += roundMoney(movement.unitCost * item.quantity);
       }
 
-      // 2. Post Accounting Debit Note
-      const supplierLedgerId = this.postingEngine.getOrCreateSupplierLedger(
-        companyId,
-        ret.supplier_id,
+      // 2. Debit note: the supplier owes us the refund; stock and input GST go down.
+      // Stock leaves at today's average cost; any gap to the bought price is an adjustment.
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(companyId, key);
+      const costDifference = roundMoney(
+        inventoryValue - sum(ret.items, (item) => item.unit_cost * item.quantity),
       );
-      const inventoryLedgerId = this.postingEngine.ledgerResolver.getLedgerId(
-        companyId,
-        'inventory_stock',
-      );
-
-      let totalTaxable = 0;
-      let totalCgst = 0;
-      let totalSgst = 0;
-      let totalIgst = 0;
-
-      for (const item of ret.items) {
-        const taxable = item.unit_cost * item.quantity;
-        totalTaxable += taxable;
-        totalIgst += item.igst_amount;
-        totalCgst += item.cgst_amount;
-        totalSgst += item.sgst_amount;
-      }
-
       const entries = [
         {
-          ledgerId: supplierLedgerId,
+          ledgerId: this.postingEngine.getOrCreateSupplierLedger(companyId, ret.supplier_id),
           type: 'DEBIT',
-          amount: Math.round(ret.total_refund_amount * 100) / 100,
+          amount: roundMoney(ret.total_refund_amount),
         },
-        {
-          ledgerId: inventoryLedgerId,
-          type: 'CREDIT',
-          amount: Math.round(inventoryValue * 100) / 100,
-        },
+        { ledgerId: ledger('inventory_stock'), type: 'CREDIT', amount: roundMoney(inventoryValue) },
+        ...taxLines(ledger, taxTotals(ret.items), 'CREDIT', 'input'),
       ];
-
-      if (totalCgst > 0) {
+      if (costDifference !== 0)
         entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cgst_input'),
-          type: 'CREDIT',
-          amount: Math.round(totalCgst * 100) / 100,
-        });
-      }
-      if (totalSgst > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'sgst_input'),
-          type: 'CREDIT',
-          amount: Math.round(totalSgst * 100) / 100,
-        });
-      }
-      if (totalIgst > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'igst_input'),
-          type: 'CREDIT',
-          amount: Math.round(totalIgst * 100) / 100,
-        });
-      }
-
-      const costDifference = Math.round((inventoryValue - totalTaxable) * 100) / 100;
-      if (costDifference !== 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'stock_adjustments'),
+          ledgerId: ledger('stock_adjustments'),
           type: costDifference > 0 ? 'DEBIT' : 'CREDIT',
           amount: Math.abs(costDifference),
         });
-      }
-      // Balance check & adjustment
-      const debits = entries.filter((e) => e.type === 'DEBIT').reduce((s, e) => s + e.amount, 0);
-      const credits = entries.filter((e) => e.type === 'CREDIT').reduce((s, e) => s + e.amount, 0);
-      const diff = Math.round((debits - credits) * 100) / 100;
-      if (Math.abs(diff) > 0) {
-        entries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'round_off'),
-          type: diff > 0 ? 'CREDIT' : 'DEBIT',
-          amount: Math.abs(diff),
-        });
-      }
 
       const voucher = this.postingEngine.post({
         companyId,
@@ -638,7 +504,7 @@ export class ReturnsService {
         referenceId: ret.id,
         narration: `Debit Note for supplier return ${ret.return_number}`,
         created_by: userId,
-        entries,
+        entries: withRoundOff(ledger, entries),
       });
 
       // Goods sent back lower what we owe this supplier on the Supplier Ledger.

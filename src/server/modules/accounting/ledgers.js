@@ -1,4 +1,5 @@
 import { AppError } from '../../shared/errors/app-error.js';
+import { roundMoney } from '../../shared/utils/numbers.js';
 
 /** Account groups seeded by migration 024. */
 export const LedgerGroup = Object.freeze({
@@ -74,4 +75,47 @@ export function cashOrBankLedgerId(
       : null;
   if (!chosen) throw new AppError(message, 400, 'BANK_ACCOUNT_REQUIRED');
   return chosen.id;
+}
+
+const sum = (rows, value) => rows.reduce((total, row) => total + value(row), 0);
+
+/**
+ * CGST, SGST and IGST voucher lines from { cgst, sgst, igst } totals, zeros
+ * left out. kind is 'output' (tax on sales) or 'input' (tax on purchases).
+ */
+export function taxLines(ledger, totals, type, kind) {
+  return ['cgst', 'sgst', 'igst']
+    .filter((tax) => totals[tax] > 0)
+    .map((tax) => ({ ledgerId: ledger(`${tax}_${kind}`), type, amount: roundMoney(totals[tax]) }));
+}
+
+/** Adds a round-off line when paise rounding leaves debits and credits apart. */
+export function withRoundOff(ledger, entries) {
+  const net = roundMoney(sum(entries, (e) => (e.type === 'DEBIT' ? e.amount : -e.amount)));
+  if (net !== 0)
+    entries.push({
+      ledgerId: ledger('round_off'),
+      type: net > 0 ? 'CREDIT' : 'DEBIT',
+      amount: Math.abs(net),
+    });
+  return entries;
+}
+
+/**
+ * Cash for paymentMode CASH; otherwise the bank ledger the screen chose,
+ * which must exist.
+ */
+export function receivingLedgerId(db, { paymentMode, bankLedgerId, companyId = 1 }) {
+  if (paymentMode === 'CASH') return systemLedgerId(db, 'cash_in_hand', companyId);
+  if (!bankLedgerId)
+    throw new AppError(
+      'Bank ledger ID is required when payment mode is BANK.',
+      400,
+      'BANK_LEDGER_REQUIRED',
+    );
+  const bank = db
+    .prepare('SELECT id FROM ledgers WHERE id = ? AND company_id = ?')
+    .get(bankLedgerId, companyId);
+  if (!bank) throw new AppError('Selected Bank ledger not found.', 404, 'BANK_LEDGER_NOT_FOUND');
+  return bank.id;
 }

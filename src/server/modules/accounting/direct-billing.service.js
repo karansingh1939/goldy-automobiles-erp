@@ -5,6 +5,12 @@ import { assertCustomerCreditLimit } from './customer-credit.service.js';
 import { DocumentSeries, nextDocumentNumber } from '../../shared/utils/document-number.js';
 import { releaseDocumentAllocations } from './allocation.service.js';
 import { roundMoney } from '../../shared/utils/numbers.js';
+import { isIsoDate } from '../../shared/utils/validation.js';
+import { taxLines, withRoundOff } from './ledgers.js';
+import { isInterstate } from '../settings/company-settings.js';
+
+const sumQuantity = (batches) =>
+  batches.reduce((total, batch) => total + Number(batch.quantity), 0);
 
 /**
  * Service to manage direct (non-job-card) counter billing.
@@ -17,30 +23,28 @@ export class DirectBillingService {
   }
 
   /**
-   * Deducts parts stock dynamically across batches using FIFO batch selection and weighted-average financial cost.
+   * Takes stock out from the oldest batches first; the cost is the item's
+   * weighted average. Returns the total cost of what was taken.
    */
   deductStock(itemId, warehouseId, quantity, invoiceId, userId) {
     let remaining = Number(quantity);
-
-    // 1. Fetch batches ordered by id ASC (FIFO)
     const batches = this.db
       .prepare(
-        `
-      SELECT id, quantity, purchase_cost
-      FROM inventory_batches
-      WHERE item_id = ? AND warehouse_id = ? AND quantity > 0
-      ORDER BY id ASC
-    `,
+        `SELECT id, quantity FROM inventory_batches
+         WHERE item_id = ? AND warehouse_id = ? AND quantity > 0 ORDER BY id`,
       )
       .all(itemId, warehouseId);
+    if (sumQuantity(batches) < remaining)
+      throw new AppError(
+        'Not enough stock of this item in the selected godown.',
+        400,
+        'INSUFFICIENT_STOCK',
+      );
 
     let totalCost = 0;
-
     for (const batch of batches) {
       if (remaining <= 0) break;
       const deduct = Math.min(batch.quantity, remaining);
-
-      // Perform stock out via InventoryService
       const movement = this.inventoryService.stockOut({
         itemId,
         warehouseId,
@@ -56,38 +60,6 @@ export class DirectBillingService {
       totalCost += roundMoney(deduct * movement.unitCost);
       remaining = roundMoney(remaining - deduct);
     }
-
-    if (remaining > 0) {
-      // Fallback: force oldest batch to handle remaining/over-allocation
-      const oldest = this.db
-        .prepare(
-          `
-        SELECT id, purchase_cost FROM inventory_batches WHERE item_id = ? AND warehouse_id = ? ORDER BY id ASC LIMIT 1
-      `,
-        )
-        .get(itemId, warehouseId);
-      if (oldest) {
-        const movement = this.inventoryService.stockOut({
-          itemId,
-          warehouseId,
-          batchId: oldest.id,
-          quantity: remaining,
-          transactionType: 'Consumption',
-          referenceType: 'direct_invoices',
-          referenceId: invoiceId,
-          notes: `Direct counter sale (unallocated)`,
-          userId,
-        });
-        totalCost += roundMoney(remaining * movement.unitCost);
-      } else {
-        throw new AppError(
-          'No stock batches available for this item in the selected warehouse.',
-          400,
-          'INSUFFICIENT_STOCK',
-        );
-      }
-    }
-
     return roundMoney(totalCost);
   }
 
@@ -161,7 +133,7 @@ export class DirectBillingService {
       );
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+    if (!isIsoDate(invoiceDate)) {
       throw new AppError('Invoice date must be YYYY-MM-DD.', 400, 'DIRECT_BILLING_INVALID_DATE');
     }
 
@@ -173,16 +145,8 @@ export class DirectBillingService {
       throw new AppError('Customer not found.', 404, 'CUSTOMER_NOT_FOUND');
     }
 
-    const company = this.db.prepare('SELECT state FROM companies WHERE id = ?').get(companyId);
-    const companyState = company ? company.state || 'Haryana' : 'Haryana';
-    const customerState = customer.state || companyState;
-    const isInterstate = customerState.trim().toLowerCase() !== companyState.trim().toLowerCase();
-
-    const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(
-      companyId,
-      customerId,
-      customer.name,
-    );
+    const interstate = isInterstate(this.db, customer.state);
+    const customerLedgerId = this.postingEngine.getOrCreateCustomerLedger(companyId, customerId);
 
     return this.db.transaction(() => {
       // 2. Reserve the next GST invoice number for the invoice's financial year
@@ -292,16 +256,9 @@ export class DirectBillingService {
       const grandTotal = Math.round(subtotal + gstTotal);
       assertCustomerCreditLimit(this.db, companyId, customerId, grandTotal);
 
-      let cgst = 0;
-      let sgst = 0;
-      let igst = 0;
-
-      if (isInterstate) {
-        igst = roundMoney(gstTotal);
-      } else {
-        cgst = roundMoney(gstTotal / 2);
-        sgst = roundMoney(gstTotal - cgst);
-      }
+      const cgst = interstate ? 0 : roundMoney(gstTotal / 2);
+      const sgst = interstate ? 0 : roundMoney(gstTotal - cgst);
+      const igst = interstate ? roundMoney(gstTotal) : 0;
 
       // Save processed invoice items
       const insertItem = this.db.prepare(`
@@ -326,68 +283,23 @@ export class DirectBillingService {
         );
       }
 
-      // 4. Compile accounting entries
-      const salesEntries = [];
-      salesEntries.push({ ledgerId: customerLedgerId, type: 'DEBIT', amount: grandTotal });
-
-      if (totalPartsRevenue > 0) {
+      // Sales voucher (the bill is rounded to whole rupees; round-off takes the
+      // difference), then the parts' cost moves from stock into COGS.
+      const ledger = (key) => this.postingEngine.ledgerResolver.getLedgerId(companyId, key);
+      const salesEntries = [{ ledgerId: customerLedgerId, type: 'DEBIT', amount: grandTotal }];
+      if (totalPartsRevenue > 0)
         salesEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'parts_sales'),
+          ledgerId: ledger('parts_sales'),
           type: 'CREDIT',
           amount: totalPartsRevenue,
         });
-      }
-      if (totalLabourRevenue > 0) {
+      if (totalLabourRevenue > 0)
         salesEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'labour_sales'),
+          ledgerId: ledger('labour_sales'),
           type: 'CREDIT',
           amount: totalLabourRevenue,
         });
-      }
-
-      if (igst > 0) {
-        salesEntries.push({
-          ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'igst_output'),
-          type: 'CREDIT',
-          amount: igst,
-        });
-      } else {
-        if (cgst > 0) {
-          salesEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cgst_output'),
-            type: 'CREDIT',
-            amount: cgst,
-          });
-        }
-        if (sgst > 0) {
-          salesEntries.push({
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'sgst_output'),
-            type: 'CREDIT',
-            amount: sgst,
-          });
-        }
-      }
-
-      // Calculate round off
-      const sumCredits = totalPartsRevenue + totalLabourRevenue + cgst + sgst + igst;
-      const roundoff = roundMoney(grandTotal - sumCredits);
-      if (Math.abs(roundoff) >= 0.01) {
-        const roundOffLedgerId = this.postingEngine.ledgerResolver.getLedgerId(
-          companyId,
-          'round_off',
-        );
-        if (roundoff > 0) {
-          salesEntries.push({ ledgerId: roundOffLedgerId, type: 'CREDIT', amount: roundoff });
-        } else {
-          salesEntries.push({
-            ledgerId: roundOffLedgerId,
-            type: 'DEBIT',
-            amount: Math.abs(roundoff),
-          });
-        }
-      }
-
-      // Post Sales Voucher
+      salesEntries.push(...taxLines(ledger, { cgst, sgst, igst }, 'CREDIT', 'output'));
       const salesVoucher = this.postingEngine.post({
         companyId,
         voucherType: 'Sales',
@@ -396,36 +308,25 @@ export class DirectBillingService {
         referenceId: invoiceId,
         narration: narration || `Direct counter sale invoice ${invoiceNumber}`,
         created_by: createdBy,
-        entries: salesEntries,
+        entries: withRoundOff(ledger, salesEntries),
       });
 
-      // Post COGS Voucher if applicable
-      let cogsVoucherId = null;
-      if (totalPartsCost > 0) {
-        const cogsEntries = [
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cogs'),
-            type: 'DEBIT',
-            amount: totalPartsCost,
-          },
-          {
-            ledgerId: this.postingEngine.ledgerResolver.getLedgerId(companyId, 'inventory_stock'),
-            type: 'CREDIT',
-            amount: totalPartsCost,
-          },
-        ];
-        const cogsVoucher = this.postingEngine.post({
-          companyId,
-          voucherType: 'Journal',
-          voucherDate: invoiceDate,
-          referenceTable: 'direct_invoices',
-          referenceId: invoiceId,
-          narration: `Cost of goods sold for direct counter invoice ${invoiceNumber}`,
-          created_by: createdBy,
-          entries: cogsEntries,
-        });
-        cogsVoucherId = cogsVoucher.voucherId;
-      }
+      const cogsVoucherId =
+        totalPartsCost > 0
+          ? this.postingEngine.post({
+              companyId,
+              voucherType: 'Journal',
+              voucherDate: invoiceDate,
+              referenceTable: 'direct_invoices',
+              referenceId: invoiceId,
+              narration: `Cost of goods sold for direct counter invoice ${invoiceNumber}`,
+              created_by: createdBy,
+              entries: [
+                { ledgerId: ledger('cogs'), type: 'DEBIT', amount: totalPartsCost },
+                { ledgerId: ledger('inventory_stock'), type: 'CREDIT', amount: totalPartsCost },
+              ],
+            }).voucherId
+          : null;
 
       // 5. Update main invoice document with final calculations and voucher links
       this.db
@@ -472,6 +373,7 @@ export class DirectBillingService {
         throw new AppError('Direct invoice not found.', 404, 'INVOICE_NOT_FOUND');
       }
 
+      // Bills from the old Sales Orders shipments must go through a return.
       if (invoice.sales_shipment_id) {
         throw new AppError(
           'Shipment invoices require a sales return; direct cancellation is unavailable.',

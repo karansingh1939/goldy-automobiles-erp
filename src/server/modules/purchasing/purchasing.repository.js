@@ -20,54 +20,11 @@ export class PurchasingRepository {
   }
 
   findPurchaseOrderById(id) {
-    return this.db
-      .prepare(
-        `
-      SELECT purchase_orders.*, suppliers.name AS supplier_name
-      FROM purchase_orders
-      JOIN suppliers ON suppliers.id = purchase_orders.supplier_id
-      WHERE purchase_orders.id = ?
-    `,
-      )
-      .get(id);
+    return this.findDocument('purchase_orders', id);
   }
 
-  listPurchaseOrders({ search, pageSize, offset }) {
-    const params = [];
-    const where = search
-      ? `WHERE purchase_orders.order_number LIKE ? COLLATE NOCASE
-          OR suppliers.name LIKE ? COLLATE NOCASE`
-      : '';
-
-    if (search) {
-      params.push(`%${search}%`, `%${search}%`);
-    }
-
-    const data = this.db
-      .prepare(
-        `
-      SELECT purchase_orders.*, suppliers.name AS supplier_name
-      FROM purchase_orders
-      JOIN suppliers ON suppliers.id = purchase_orders.supplier_id
-      ${where}
-      ORDER BY purchase_orders.id DESC
-      LIMIT ? OFFSET ?
-    `,
-      )
-      .all(...params, pageSize, offset);
-
-    const total = this.db
-      .prepare(
-        `
-      SELECT COUNT(*) AS count
-      FROM purchase_orders
-      JOIN suppliers ON suppliers.id = purchase_orders.supplier_id
-      ${where}
-    `,
-      )
-      .get(...params).count;
-
-    return { data, total };
+  listPurchaseOrders(paging) {
+    return this.listDocuments('purchase_orders', 'order_number', paging);
   }
 
   createPurchaseOrder(data) {
@@ -100,18 +57,7 @@ export class PurchasingRepository {
   }
 
   updatePurchaseOrderTotals(id, totals) {
-    this.db
-      .prepare(
-        `
-      UPDATE purchase_orders
-      SET subtotal = @subtotal,
-          gst_total = @gst_total,
-          grand_total = @grand_total,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = @id
-    `,
-      )
-      .run({ ...totals, id });
+    this.updateTotals('purchase_orders', id, totals);
   }
 
   updatePurchaseOrderStatus(id, status) {
@@ -173,69 +119,15 @@ export class PurchasingRepository {
   }
 
   listPurchaseItemsByOrderId(orderId) {
-    return this.db
-      .prepare(
-        `
-      SELECT purchase_items.*, inventory_items.sku, inventory_items.item_name, warehouses.name AS warehouse_name
-      FROM purchase_items
-      JOIN inventory_items ON inventory_items.id = purchase_items.item_id
-      JOIN warehouses ON warehouses.id = purchase_items.warehouse_id
-      WHERE purchase_items.purchase_order_id = ?
-      ORDER BY purchase_items.id
-    `,
-      )
-      .all(orderId);
+    return this.listItems('purchase_order_id', orderId);
   }
 
   findPurchaseReceiptById(id) {
-    return this.db
-      .prepare(
-        `
-      SELECT purchase_receipts.*, suppliers.name AS supplier_name
-      FROM purchase_receipts
-      JOIN suppliers ON suppliers.id = purchase_receipts.supplier_id
-      WHERE purchase_receipts.id = ?
-    `,
-      )
-      .get(id);
+    return this.findDocument('purchase_receipts', id);
   }
 
-  listPurchaseReceipts({ search, pageSize, offset }) {
-    const params = [];
-    const where = search
-      ? `WHERE purchase_receipts.receipt_number LIKE ? COLLATE NOCASE
-          OR suppliers.name LIKE ? COLLATE NOCASE`
-      : '';
-
-    if (search) {
-      params.push(`%${search}%`, `%${search}%`);
-    }
-
-    const data = this.db
-      .prepare(
-        `
-      SELECT purchase_receipts.*, suppliers.name AS supplier_name
-      FROM purchase_receipts
-      JOIN suppliers ON suppliers.id = purchase_receipts.supplier_id
-      ${where}
-      ORDER BY purchase_receipts.id DESC
-      LIMIT ? OFFSET ?
-    `,
-      )
-      .all(...params, pageSize, offset);
-
-    const total = this.db
-      .prepare(
-        `
-      SELECT COUNT(*) AS count
-      FROM purchase_receipts
-      JOIN suppliers ON suppliers.id = purchase_receipts.supplier_id
-      ${where}
-    `,
-      )
-      .get(...params).count;
-
-    return { data, total };
+  listPurchaseReceipts(paging) {
+    return this.listDocuments('purchase_receipts', 'receipt_number', paging);
   }
 
   createPurchaseReceipt(data) {
@@ -268,84 +160,61 @@ export class PurchasingRepository {
   }
 
   updatePurchaseReceiptTotals(id, totals) {
+    this.updateTotals('purchase_receipts', id, totals);
+  }
+
+  listPurchaseItemsByReceiptId(receiptId) {
+    return this.listItems('purchase_receipt_id', receiptId);
+  }
+
+  // Purchase orders and supplier bills (receipts) share these queries.
+  findDocument(table, id) {
+    return this.db
+      .prepare(
+        `SELECT ${table}.*, suppliers.name AS supplier_name
+         FROM ${table} JOIN suppliers ON suppliers.id = ${table}.supplier_id
+         WHERE ${table}.id = ?`,
+      )
+      .get(id);
+  }
+
+  /** Newest first, searching the document number and supplier name. */
+  listDocuments(table, numberColumn, { search, pageSize, offset }) {
+    const where = search
+      ? `WHERE ${table}.${numberColumn} LIKE ? COLLATE NOCASE OR suppliers.name LIKE ? COLLATE NOCASE`
+      : '';
+    const params = search ? [`%${search}%`, `%${search}%`] : [];
+    const from = `FROM ${table} JOIN suppliers ON suppliers.id = ${table}.supplier_id ${where}`;
+    return {
+      data: this.db
+        .prepare(
+          `SELECT ${table}.*, suppliers.name AS supplier_name ${from} ORDER BY ${table}.id DESC LIMIT ? OFFSET ?`,
+        )
+        .all(...params, pageSize, offset),
+      total: this.db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...params).count,
+    };
+  }
+
+  updateTotals(table, id, totals) {
     this.db
       .prepare(
-        `
-      UPDATE purchase_receipts
-      SET subtotal = @subtotal,
-          gst_total = @gst_total,
-          grand_total = @grand_total,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = @id
-    `,
+        `UPDATE ${table} SET subtotal = @subtotal, gst_total = @gst_total, grand_total = @grand_total,
+           updated_at = CURRENT_TIMESTAMP WHERE id = @id`,
       )
       .run({ ...totals, id });
   }
 
-  listPurchaseItemsByReceiptId(receiptId) {
+  listItems(parentColumn, parentId) {
     return this.db
       .prepare(
-        `
-      SELECT purchase_items.*, inventory_items.sku, inventory_items.item_name, warehouses.name AS warehouse_name
-      FROM purchase_items
-      JOIN inventory_items ON inventory_items.id = purchase_items.item_id
-      JOIN warehouses ON warehouses.id = purchase_items.warehouse_id
-      WHERE purchase_items.purchase_receipt_id = ?
-      ORDER BY purchase_items.id
-    `,
+        `SELECT purchase_items.*, inventory_items.sku, inventory_items.item_name, warehouses.name AS warehouse_name
+         FROM purchase_items
+         JOIN inventory_items ON inventory_items.id = purchase_items.item_id
+         JOIN warehouses ON warehouses.id = purchase_items.warehouse_id
+         WHERE purchase_items.${parentColumn} = ?
+         ORDER BY purchase_items.id`,
       )
-      .all(receiptId);
-  }
-
-  latestSupplierBalance(supplierId) {
-    return (
-      this.db
-        .prepare(
-          `
-      SELECT balance_after
-      FROM supplier_ledgers
-      WHERE supplier_id = ?
-      ORDER BY id DESC
-      LIMIT 1
-    `,
-        )
-        .get(supplierId)?.balance_after ?? 0
-    );
-  }
-
-  createSupplierLedger(data) {
-    const result = this.db
-      .prepare(
-        `
-      INSERT INTO supplier_ledgers (
-        supplier_id,
-        entry_date,
-        entry_type,
-        reference_type,
-        reference_id,
-        debit,
-        credit,
-        balance_after,
-        notes,
-        created_by
-      )
-      VALUES (
-        @supplier_id,
-        @entry_date,
-        @entry_type,
-        @reference_type,
-        @reference_id,
-        @debit,
-        @credit,
-        @balance_after,
-        @notes,
-        @created_by
-      )
-    `,
-      )
-      .run(data);
-
-    return result.lastInsertRowid;
+      .all(parentId);
   }
 
   listSupplierLedger(supplierId, { limit, offset, dateFrom, dateTo }) {

@@ -3,6 +3,7 @@ import { AppError } from '../../shared/errors/app-error.js';
 import { PeriodLockService } from './period-lock.service.js';
 import { WorkshopFinanceRepository } from './workshop-finance.repository.js';
 import { roundMoney } from '../../shared/utils/numbers.js';
+import { isIsoDate } from '../../shared/utils/validation.js';
 
 export class WorkshopFinanceService {
   constructor(db) {
@@ -14,7 +15,7 @@ export class WorkshopFinanceService {
     const invoices = this.repository.openInvoices().filter((row) => row.outstanding > 0);
     const balances = this.repository.customerBalances();
     const customers = new Map();
-    for (const row of invoices) {
+    const customerOf = (row) => {
       if (!customers.has(row.customer_id))
         customers.set(row.customer_id, {
           customerId: row.customer_id,
@@ -22,17 +23,11 @@ export class WorkshopFinanceService {
           phone: row.phone,
           documents: [],
         });
-      customers.get(row.customer_id).documents.push(row);
-    }
+      return customers.get(row.customer_id);
+    };
+    for (const row of invoices) customerOf(row).documents.push(row);
     for (const row of balances) {
-      if (!customers.has(row.customer_id))
-        customers.set(row.customer_id, {
-          customerId: row.customer_id,
-          name: row.customer_name,
-          phone: row.phone,
-          documents: [],
-        });
-      const customer = customers.get(row.customer_id);
+      const customer = customerOf(row);
       customer.ledgerBalance = roundMoney((customer.ledgerBalance || 0) + row.balance);
     }
     const buckets = { '0–30': 0, '31–60': 0, '61–90': 0, '91+': 0, unaged: 0 };
@@ -82,13 +77,7 @@ export class WorkshopFinanceService {
     };
   }
   validateDate(date) {
-    if (
-      typeof date !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-      !Number.isFinite(Date.parse(`${date}T12:00:00`)) ||
-      localDate(new Date(`${date}T12:00:00`)) !== date ||
-      date > localDate()
-    )
+    if (typeof date !== 'string' || !isIsoDate(date) || date > localDate())
       throw new AppError('Choose a valid cash count date up to today.', 400, 'VALIDATION_ERROR');
   }
   cashSummary(date = localDate()) {

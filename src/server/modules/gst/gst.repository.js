@@ -22,22 +22,50 @@ function buildWhereClause(tableAlias, filters = {}) {
   };
 }
 
+/** "AND column between the dates" conditions with named parameters. */
+function dateRange(column, filters = {}) {
+  const conditions = [];
+  const params = {};
+  if (filters.dateFrom) {
+    conditions.push(`DATE(${column}) >= DATE(@dateFrom)`);
+    params.dateFrom = filters.dateFrom;
+  }
+  if (filters.dateTo) {
+    conditions.push(`DATE(${column}) <= DATE(@dateTo)`);
+    params.dateTo = filters.dateTo;
+  }
+  return { conditions, params };
+}
+
+/** Adds up the given number columns of rows grouped by a key. */
+function addUp(rows, keyOf, columns, start) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!groups.has(key))
+      groups.set(key, { ...start(row), ...Object.fromEntries(columns.map((c) => [c, 0])) });
+    const entry = groups.get(key);
+    for (const column of columns) entry[column] += row[column];
+  }
+  return [...groups.values()];
+}
+
+const TAX_COLUMNS = ['taxable_value', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_tax'];
+
 export class GstRepository {
   constructor(db) {
     this.db = db;
   }
 
   customerCreditNotes(filters = {}) {
-    const conditions = ["r.status = 'COMPLETED'", "i.status = 'FINALIZED'", 'r.company_id = 1'];
-    const params = {};
-    if (filters.dateFrom) {
-      conditions.push('DATE(r.return_date) >= DATE(@dateFrom)');
-      params.dateFrom = filters.dateFrom;
-    }
-    if (filters.dateTo) {
-      conditions.push('DATE(r.return_date) <= DATE(@dateTo)');
-      params.dateTo = filters.dateTo;
-    }
+    const range = dateRange('r.return_date', filters);
+    const conditions = [
+      "r.status = 'COMPLETED'",
+      "i.status = 'FINALIZED'",
+      'r.company_id = 1',
+      ...range.conditions,
+    ];
+    const params = range.params;
     return this.db
       .prepare(
         `
@@ -67,42 +95,21 @@ export class GstRepository {
     const dirFilters = buildWhereClause('direct_invoices', filters);
 
     const mergedParams = { ...invFilters.params };
-
-    // 1. Outward job cards
-    const jobCards = this.db
-      .prepare(
-        `
-      SELECT
-        COUNT(*) AS count,
-        COALESCE(SUM(taxable_amount), 0) AS taxable_value,
-        COALESCE(SUM(cgst_total), 0) AS cgst_amount,
-        COALESCE(SUM(sgst_total), 0) AS sgst_amount,
-        COALESCE(SUM(igst_total), 0) AS igst_amount,
-        COALESCE(SUM(gst_total), 0) AS total_tax,
-        COALESCE(SUM(grand_total), 0) AS gross_value
-      FROM invoices
-      WHERE ${invFilters.clause}
-    `,
-      )
-      .get(mergedParams);
-
-    // 2. Outward direct invoices
-    const directSales = this.db
-      .prepare(
-        `
-      SELECT
-        COUNT(*) AS count,
-        COALESCE(SUM(subtotal), 0) AS taxable_value,
-        COALESCE(SUM(cgst_total), 0) AS cgst_amount,
-        COALESCE(SUM(sgst_total), 0) AS sgst_amount,
-        COALESCE(SUM(igst_total), 0) AS igst_amount,
-        COALESCE(SUM(gst_total), 0) AS total_tax,
-        COALESCE(SUM(grand_total), 0) AS gross_value
-      FROM direct_invoices
-      WHERE ${dirFilters.clause}
-    `,
-      )
-      .get(mergedParams);
+    const totals = (table, taxable, clause) =>
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count,
+             COALESCE(SUM(${taxable}), 0) AS taxable_value,
+             COALESCE(SUM(cgst_total), 0) AS cgst_amount,
+             COALESCE(SUM(sgst_total), 0) AS sgst_amount,
+             COALESCE(SUM(igst_total), 0) AS igst_amount,
+             COALESCE(SUM(gst_total), 0) AS total_tax,
+             COALESCE(SUM(grand_total), 0) AS gross_value
+           FROM ${table} WHERE ${clause}`,
+        )
+        .get(mergedParams);
+    const jobCards = totals('invoices', 'taxable_amount', invFilters.clause);
+    const directSales = totals('direct_invoices', 'subtotal', dirFilters.clause);
 
     // 3. Outward lines count
     const jobLines = this.db
@@ -181,7 +188,7 @@ export class GstRepository {
       JOIN invoices ON invoices.id = invoice_items.invoice_id
       JOIN customers ON customers.id = invoices.customer_id
       LEFT JOIN inventory_items ON inventory_items.id = invoice_items.inventory_item_id
-      WHERE ${invFilters.clause.replace(/invoices\./g, 'invoices.')}
+      WHERE ${invFilters.clause}
 
       UNION ALL
 
@@ -212,7 +219,7 @@ export class GstRepository {
       JOIN direct_invoices ON direct_invoices.id = direct_invoice_items.direct_invoice_id
       JOIN customers ON customers.id = direct_invoices.customer_id
       LEFT JOIN inventory_items ON inventory_items.id = direct_invoice_items.item_id
-      WHERE ${dirFilters.clause.replace(/direct_invoices\./g, 'direct_invoices.')}
+      WHERE ${dirFilters.clause}
 
       ORDER BY invoice_date, invoice_number, line_id
     `;
@@ -234,48 +241,10 @@ export class GstRepository {
    * Compiles GSTR-3B tax details combining Outward Supplies and Eligible Input Tax Credit (ITC).
    */
   gstr3bDataset(filters = {}) {
-    const invFilters = buildWhereClause('invoices', filters);
-    const dirFilters = buildWhereClause('direct_invoices', filters);
-
-    const mergedParams = { ...invFilters.params };
-
-    // 3.1.a Outward supplies (Sales + Direct billing)
-    const jobCards = this.db
-      .prepare(
-        `
-      SELECT
-        COUNT(*) AS count,
-        COALESCE(SUM(taxable_amount), 0) AS taxable_value,
-        COALESCE(SUM(cgst_total), 0) AS cgst_amount,
-        COALESCE(SUM(sgst_total), 0) AS sgst_amount,
-        COALESCE(SUM(igst_total), 0) AS igst_amount,
-        COALESCE(SUM(gst_total), 0) AS total_tax
-      FROM invoices
-      WHERE ${invFilters.clause}
-    `,
-      )
-      .get(mergedParams);
-
-    const directSales = this.db
-      .prepare(
-        `
-      SELECT
-        COUNT(*) AS count,
-        COALESCE(SUM(subtotal), 0) AS taxable_value,
-        COALESCE(SUM(cgst_total), 0) AS cgst_amount,
-        COALESCE(SUM(sgst_total), 0) AS sgst_amount,
-        COALESCE(SUM(igst_total), 0) AS igst_amount,
-        COALESCE(SUM(gst_total), 0) AS total_tax
-      FROM direct_invoices
-      WHERE ${dirFilters.clause}
-    `,
-      )
-      .get(mergedParams);
-
+    // 3.1(a) outward supplies: sales less credit notes
     const summary = this.summary(filters);
     const totalOutward = {
-      invoice_count: jobCards.count + directSales.count,
-      credit_note_count: summary.credit_note_count,
+      invoice_count: summary.invoice_count,
       taxable_value: summary.taxable_value,
       integrated_tax: summary.igst_amount,
       central_tax: summary.cgst_amount,
@@ -284,16 +253,8 @@ export class GstRepository {
       total_tax: summary.total_tax,
     };
 
-    const dateConditions = [];
-    const taxParams = {};
-    if (filters.dateFrom) {
-      dateConditions.push('DATE(v.voucher_date) >= DATE(@dateFrom)');
-      taxParams.dateFrom = filters.dateFrom;
-    }
-    if (filters.dateTo) {
-      dateConditions.push('DATE(v.voucher_date) <= DATE(@dateTo)');
-      taxParams.dateTo = filters.dateTo;
-    }
+    // 4. Input tax credit from the purchase vouchers in the period
+    const { conditions: dateConditions, params: taxParams } = dateRange('v.voucher_date', filters);
     const dateWhere = dateConditions.length ? `AND ${dateConditions.join(' AND ')}` : '';
     const input = this.db
       .prepare(
@@ -335,21 +296,12 @@ export class GstRepository {
       cess: 0,
       total_tax: amount('igst_input') + amount('cgst_input') + amount('sgst_input'),
     };
-    const rates = new Map();
-    for (const row of this.gstr1Dataset(filters)) {
-      const entry = rates.get(row.gst_rate) || {
-        gst_rate: row.gst_rate,
-        taxable_value: 0,
-        cgst_amount: 0,
-        sgst_amount: 0,
-        igst_amount: 0,
-        total_tax: 0,
-      };
-      for (const key of ['taxable_value', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_tax'])
-        entry[key] += row[key];
-      rates.set(row.gst_rate, entry);
-    }
-    const rateBreakdown = [...rates.values()].sort((a, b) => a.gst_rate - b.gst_rate);
+    const rateBreakdown = addUp(
+      this.gstr1Dataset(filters),
+      (row) => row.gst_rate,
+      TAX_COLUMNS,
+      (row) => ({ gst_rate: row.gst_rate }),
+    ).sort((a, b) => a.gst_rate - b.gst_rate);
 
     return {
       outward_supplies: totalOutward,
@@ -362,30 +314,11 @@ export class GstRepository {
    * Dynamic HSN/SAC summary report.
    */
   hsnSummary(filters = {}) {
-    const groups = new Map();
-    for (const row of this.gstr1Dataset(filters)) {
-      const entry = groups.get(row.hsn_sac) || {
-        hsn_sac: row.hsn_sac,
-        quantity: 0,
-        taxable_value: 0,
-        cgst_amount: 0,
-        sgst_amount: 0,
-        igst_amount: 0,
-        total_tax: 0,
-      };
-      for (const key of [
-        'quantity',
-        'taxable_value',
-        'cgst_amount',
-        'sgst_amount',
-        'igst_amount',
-        'total_tax',
-      ])
-        entry[key] += row[key];
-      groups.set(row.hsn_sac, entry);
-    }
-    return [...groups.values()].sort(
-      (a, b) => b.taxable_value - a.taxable_value || a.hsn_sac.localeCompare(b.hsn_sac),
-    );
+    return addUp(
+      this.gstr1Dataset(filters),
+      (row) => row.hsn_sac,
+      ['quantity', ...TAX_COLUMNS],
+      (row) => ({ hsn_sac: row.hsn_sac }),
+    ).sort((a, b) => b.taxable_value - a.taxable_value || a.hsn_sac.localeCompare(b.hsn_sac));
   }
 }

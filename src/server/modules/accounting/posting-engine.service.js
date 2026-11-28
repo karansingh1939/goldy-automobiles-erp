@@ -3,15 +3,13 @@ import { LedgerResolverService } from './ledger-resolver.service.js';
 import { PeriodLockService } from './period-lock.service.js';
 import { VoucherNumberService } from './voucher-number.service.js';
 import { insertLedger, LedgerGroup } from './ledgers.js';
+import { isIsoDate } from '../../shared/utils/validation.js';
 
 /**
  * Orchestrator service for double-entry ledger postings.
  * Delegates sequence checks, date validations, and key resolutions to modular sub-services.
  */
 export class AccountingPostingEngine {
-  /**
-   * @param {object} db - Database connection instance
-   */
   constructor(db) {
     this.db = db;
     this.ledgerResolver = new LedgerResolverService(db);
@@ -54,7 +52,7 @@ export class AccountingPostingEngine {
       );
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(voucherDate)) {
+    if (!isIsoDate(voucherDate)) {
       throw new AppError('Voucher date must be in YYYY-MM-DD format.', 400, 'INVALID_DATE_FORMAT');
     }
 
@@ -103,6 +101,9 @@ export class AccountingPostingEngine {
             INSERT INTO journal_entries (voucher_id, ledger_id, entry_type, amount, narration)
             VALUES (?, ?, ?, ?, ?)
           `);
+          const findLedger = this.db.prepare(
+            'SELECT id, nature FROM ledgers WHERE id = ? AND company_id = ?',
+          );
 
           // Post entries and update cache balances
           for (const entry of entries) {
@@ -114,10 +115,7 @@ export class AccountingPostingEngine {
               );
             }
 
-            // Verify ledger exists
-            const ledger = this.db
-              .prepare('SELECT id, nature FROM ledgers WHERE id = ? AND company_id = ?')
-              .get(entry.ledgerId, companyId);
+            const ledger = findLedger.get(entry.ledgerId, companyId);
             if (!ledger) {
               throw new AppError(
                 `Ledger ID ${entry.ledgerId} not found under company ${companyId}.`,
@@ -187,12 +185,11 @@ export class AccountingPostingEngine {
       .prepare('SELECT * FROM journal_entries WHERE voucher_id = ?')
       .all(voucherId);
 
+    const findLedger = this.db.prepare('SELECT nature FROM ledgers WHERE id = ?');
     return this.db.transaction(() => {
       // Revert balances
       for (const entry of entries) {
-        const ledger = this.db
-          .prepare('SELECT nature FROM ledgers WHERE id = ?')
-          .get(entry.ledger_id);
+        const ledger = findLedger.get(entry.ledger_id);
         const reverseType = entry.entry_type === 'DEBIT' ? 'CREDIT' : 'DEBIT';
         this.updateRunningBalance(
           companyId,
@@ -267,10 +264,9 @@ export class AccountingPostingEngine {
       return;
     }
 
+    const findLedger = this.db.prepare('SELECT name, system_key FROM ledgers WHERE id = ?');
     const ledgerDetails = entries.map((entry) => {
-      const ledger = this.db
-        .prepare('SELECT name, system_key FROM ledgers WHERE id = ?')
-        .get(entry.ledgerId);
+      const ledger = findLedger.get(entry.ledgerId);
       if (!ledger) {
         throw new AppError(`Ledger ID ${entry.ledgerId} not found.`, 404, 'LEDGER_NOT_FOUND');
       }
@@ -314,38 +310,18 @@ export class AccountingPostingEngine {
   }
 
   /**
-   * Dynamically increments/decrements balances in ledger_balances cache table.
+   * Adds an entry to the cached ledger balance: up for the ledger's own side
+   * (debit on a debit ledger), down for the other side.
    */
   updateRunningBalance(companyId, ledgerId, ledgerNature, entryType, amount) {
-    const current = this.db
-      .prepare('SELECT running_balance FROM ledger_balances WHERE company_id = ? AND ledger_id = ?')
-      .get(companyId, ledgerId);
-    let running = current ? current.running_balance : 0;
-
-    if (ledgerNature === 'Debit') {
-      if (entryType === 'DEBIT') {
-        running += amount;
-      } else {
-        running -= amount;
-      }
-    } else {
-      if (entryType === 'CREDIT') {
-        running += amount;
-      } else {
-        running -= amount;
-      }
-    }
-
+    const delta = (ledgerNature === 'Debit') === (entryType === 'DEBIT') ? amount : -amount;
     this.db
       .prepare(
-        `
-      INSERT INTO ledger_balances (company_id, ledger_id, running_balance)
-      VALUES (?, ?, ?)
-      ON CONFLICT(company_id, ledger_id)
-      DO UPDATE SET running_balance = EXCLUDED.running_balance
-    `,
+        `INSERT INTO ledger_balances (company_id, ledger_id, running_balance) VALUES (?, ?, ?)
+         ON CONFLICT(company_id, ledger_id)
+         DO UPDATE SET running_balance = running_balance + excluded.running_balance`,
       )
-      .run(companyId, ledgerId, running);
+      .run(companyId, ledgerId, delta);
   }
 
   /** The customer's own ledger under Sundry Debtors, made on first use. */

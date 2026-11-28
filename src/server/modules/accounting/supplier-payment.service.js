@@ -1,6 +1,8 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import { recordSupplierLedgerEntry } from '../purchasing/supplier-ledger.js';
 import { roundMoney } from '../../shared/utils/numbers.js';
+import { nextYearlyNumber } from '../../shared/utils/document-number.js';
+import { receivingLedgerId } from './ledgers.js';
 
 function recordSupplierLedger(db, { supplierId, date, paymentId, debit, credit, notes, userId }) {
   recordSupplierLedgerEntry(db, {
@@ -20,11 +22,6 @@ function recordSupplierLedger(db, { supplierId, date, paymentId, debit, credit, 
  * Service to manage Supplier Payments, payment vouchers, and allocations.
  */
 export class SupplierPaymentService {
-  /**
-   * @param {object} db - Database connection instance
-   * @param {object} postingEngine - Injected PostingEngine instance
-   * @param {object} allocationService - Injected AllocationService instance
-   */
   constructor(db, postingEngine, allocationService) {
     this.db = db;
     this.postingEngine = postingEngine;
@@ -75,43 +72,14 @@ export class SupplierPaymentService {
         throw new AppError('Supplier is inactive.', 400, 'SUPPLIER_INACTIVE');
       }
 
-      // Resolve Cash or Bank ledger
-      let creditLedgerId;
-      if (paymentMode === 'CASH') {
-        creditLedgerId = this.postingEngine.ledgerResolver.getLedgerId(companyId, 'cash_in_hand');
-      } else {
-        if (!bankLedgerId) {
-          throw new AppError(
-            'Bank ledger ID is required when payment mode is BANK.',
-            400,
-            'BANK_LEDGER_REQUIRED',
-          );
-        }
-        const bank = this.db
-          .prepare('SELECT id FROM ledgers WHERE id = ? AND company_id = ?')
-          .get(bankLedgerId, companyId);
-        if (!bank) {
-          throw new AppError('Selected Bank ledger not found.', 404, 'BANK_LEDGER_NOT_FOUND');
-        }
-        creditLedgerId = bankLedgerId;
-      }
+      const creditLedgerId = receivingLedgerId(this.db, { paymentMode, bankLedgerId, companyId });
 
-      // 2. Generate sequential payment voucher document number
-      const year = new Date(paymentDate).getFullYear();
-      const prefix = `PMT-${year}-`;
-      const last = this.db
-        .prepare(
-          'SELECT payment_number FROM supplier_payments WHERE payment_number LIKE ? ORDER BY payment_number DESC LIMIT 1',
-        )
-        .get(`${prefix}%`);
-      let seq = 1;
-      if (last) {
-        const match = last.payment_number.match(/(\d+)$/);
-        if (match) {
-          seq = parseInt(match[1], 10) + 1;
-        }
-      }
-      const paymentNumber = `${prefix}${String(seq).padStart(6, '0')}`;
+      const paymentNumber = nextYearlyNumber(this.db, {
+        table: 'supplier_payments',
+        column: 'payment_number',
+        prefix: 'PMT',
+        date: paymentDate,
+      });
 
       // 3. Post double-entry Payment Voucher (Debit AP, Credit Cash/Bank)
       const voucher = this.postingEngine.post({
@@ -123,10 +91,8 @@ export class SupplierPaymentService {
         referenceId: null, // Set after insert
         entries: [
           {
-            // Suppliers with no posted purchase yet have no ledger; create it on first payment.
-            ledgerId:
-              supplier.ledger_id ||
-              this.postingEngine.getOrCreateSupplierLedger(companyId, supplierId),
+            // Made on first use for a supplier with no purchase posted yet.
+            ledgerId: this.postingEngine.getOrCreateSupplierLedger(companyId, supplierId),
             type: 'DEBIT',
             amount: payAmount,
             narration: `Payment to supplier: ${supplier.name}`,

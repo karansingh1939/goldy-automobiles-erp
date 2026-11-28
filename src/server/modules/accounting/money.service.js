@@ -46,6 +46,12 @@ const fail = (message, code = 'VALIDATION_ERROR', status = 400) => {
   throw new AppError(message, status, code);
 };
 
+const cleanName = (name) =>
+  String(name || '')
+    .trim()
+    .slice(0, 80);
+const withNote = (text, note) => (note ? `${text}: ${String(note).trim().slice(0, 200)}` : text);
+
 export class MoneyService {
   constructor(db, { postingEngine, auditRepository } = {}) {
     this.db = db;
@@ -79,9 +85,7 @@ export class MoneyService {
 
   /** Adds the owner's own bank account (e.g. "SBI Current Account"). */
   addBankAccount({ name } = {}, userId = null) {
-    const clean = String(name || '')
-      .trim()
-      .slice(0, 80);
+    const clean = cleanName(name);
     if (!clean) fail('Give the bank account a name, for example "SBI Current Account".');
     return this.db.transaction(() => {
       if (
@@ -117,9 +121,7 @@ export class MoneyService {
   renameBankAccount(id, { name } = {}, userId = null) {
     const account = this.accountById(id);
     if (account.kind !== 'BANK') fail('Only bank accounts can be renamed.');
-    const clean = String(name || '')
-      .trim()
-      .slice(0, 80);
+    const clean = cleanName(name);
     if (!clean) fail('Give the bank account a name.');
     this.db
       .prepare('UPDATE ledgers SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -150,7 +152,7 @@ export class MoneyService {
       companyId: this.companyId,
       voucherType: direction === 'IN' ? 'Receipt' : 'Payment',
       voucherDate: postingDate,
-      narration: `${choice.label}${note ? `: ${String(note).trim().slice(0, 200)}` : ''}`,
+      narration: withNote(choice.label, note),
       created_by: userId,
       entries:
         direction === 'IN'
@@ -198,7 +200,7 @@ export class MoneyService {
         companyId: this.companyId,
         voucherType: 'Payment',
         voucherDate: date || localDate(),
-        narration: `Refund to ${customer.name}${note ? `: ${String(note).trim().slice(0, 200)}` : ''}`,
+        narration: withNote(`Refund to ${customer.name}`, note),
         referenceTable: 'customer_refunds',
         referenceId: customer.id,
         created_by: userId,
